@@ -36,6 +36,7 @@ MAX_FILL_DAYS = 62
 MAX_KM = 5000
 DEFAULT_WEEKLY_MINUTES = 40 * 60
 DEFAULT_WORKDAYS = "01234"  # Monday-Friday
+DEFAULT_DAY_MINUTES = 8 * 60
 COLOR_RE = r"^#[0-9a-fA-F]{6}$"
 USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 DEV_USER = {"id": "dev", "username": "dev", "display_name": "Developer"}
@@ -122,16 +123,17 @@ class DayIn(BaseModel):
 
 class SettingsIn(BaseModel):
     weekly_hours: float = Field(ge=0, le=168)
+    day_hours: float = Field(default=DEFAULT_DAY_MINUTES / 60, ge=0.25, le=24)
     workdays: list[int] = Field(max_length=7)
     balance_start: dt.date | None = None
     office_km: float | None = Field(default=None, ge=0, le=MAX_KM)
     default_location: Literal["office", "remote"] | None = None
 
-    @field_validator("weekly_hours")
+    @field_validator("weekly_hours", "day_hours")
     @classmethod
     def quarter_hours(cls, v: float) -> float:
         if round(v * 60) % STEP:
-            raise ValueError("weekly hours must be in steps of 0.25")
+            raise ValueError("hours must be in steps of 0.25")
         return v
 
     @field_validator("workdays")
@@ -178,6 +180,10 @@ def migrate(engine) -> None:
         log.info("Migrating: adding user_settings.default_location")
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE user_settings ADD COLUMN default_location VARCHAR(10) NULL"))
+    if "day_minutes" not in columns:
+        log.info("Migrating: adding user_settings.day_minutes")
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE user_settings ADD COLUMN day_minutes INTEGER NULL"))
 
 
 def minutes_for_day(day: dt.date, user_id: str) -> int:
@@ -237,6 +243,8 @@ def settings_out(st: UserSettings) -> dict:
         "office_km": st.office_km,
         "default_location": st.default_location,
         "daily_minutes": round(daily_target(st)),
+        "day_hours": (st.day_minutes or DEFAULT_DAY_MINUTES) / 60,
+        "day_minutes": st.day_minutes or DEFAULT_DAY_MINUTES,
     }
 
 
@@ -503,6 +511,7 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
     def write_settings(body: SettingsIn, session: SessionDep, user: UserDep, response: Response):
         st = get_settings(session, user.id)
         st.weekly_minutes = round(body.weekly_hours * 60)
+        st.day_minutes = round(body.day_hours * 60)
         st.workdays = "".join(str(d) for d in body.workdays)
         st.balance_start = body.balance_start
         st.office_km = None if body.office_km is None else round(body.office_km, 1)

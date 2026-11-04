@@ -123,7 +123,7 @@
   const app = document.getElementById("app");
   let categories = [];
   // Per-user settings; also used to tell workdays and the daily target.
-  let settings = { weekly_hours: 0, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: null, default_location: null, daily_minutes: 0 };
+  let settings = { weekly_hours: 0, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: null, default_location: null, daily_minutes: 0, day_hours: 8, day_minutes: 8 * 60 };
   const isWorkday = (d) => settings.workdays.includes((d.getDay() + 6) % 7);
   const catById = (id) => categories.find((c) => c.id === id);
   let current = { view: "day" };
@@ -207,7 +207,7 @@
     let keySeq = 0;
     const d = parseIso(date);
     const isToday = date === today();
-    const target = isWorkday(d) ? settings.daily_minutes : 0;
+    const target = isWorkday(d) ? settings.day_minutes : 0;
 
     const status = h("span", { class: "status" });
     const totalEl = h("strong");
@@ -564,7 +564,7 @@
     const empty = days.filter((d) => isWorkday(d) && !report.day_totals[iso(d)]);
     const usable = categories.filter((c) => !c.archived);
     const vacation = usable.find((c) => /vacation/i.test(c.name)) || usable[0];
-    let minutes = settings.daily_minutes ? toStep(settings.daily_minutes) : WORKDAY;
+    let minutes = settings.day_minutes || WORKDAY;
     const catSel = h("select", { class: "field", "aria-label": "Category" },
       usable.map((c) => h("option", { value: String(c.id), selected: c === vacation }, c.name)));
     const hoursEl = h("span", { class: "hours" }, fmt(minutes));
@@ -660,19 +660,19 @@
       msg.className = "status"; msg.textContent = "Saving…";
       try {
         settings = await api.saveSettings({
-          weekly_hours: st.weekly_hours, workdays: st.workdays, balance_start: st.balance_start, office_km: st.office_km,
+          weekly_hours: st.weekly_hours, day_hours: st.day_hours, workdays: st.workdays, balance_start: st.balance_start, office_km: st.office_km,
           default_location: st.default_location,
         });
         msg.className = "status ok"; msg.textContent = "✓ Saved";
-        perDay.textContent = settings.daily_minutes ? `${fmt(settings.daily_minutes)} per workday` : "No contract hours: no target or balance";
+        contractHint.textContent = settings.weekly_hours ? "" : "0: no week/month target or balance";
       } catch (e) { msg.className = "status err"; msg.textContent = `Not saved: ${e.message}`; }
     }, 400);
     const num = (value, attrs, onval) => h("input", {
       type: "number", class: "field num", value: value == null ? "" : String(value), ...attrs,
       oninput: (ev) => { const v = ev.target.value === "" ? null : Number(ev.target.value); if (v == null || !Number.isNaN(v)) { onval(v); save(); } },
     });
-    const perDay = h("span", { class: "hint inline" });
-    perDay.textContent = settings.daily_minutes ? `${fmt(settings.daily_minutes)} per workday` : "No contract hours: no target or balance";
+    const contractHint = h("span", { class: "hint inline" });
+    contractHint.textContent = settings.weekly_hours ? "" : "0: no week/month target or balance";
 
     const dayNames = [...Array(7)].map((_, i) => dfmt(addDays(mondayOf(new Date()), i), { weekday: "short" }));
     const dayBtns = dayNames.map((name, i) => h("button", {
@@ -702,7 +702,10 @@
     const row = (label, ...control) => h("div", { class: "set-row" }, h("span", { class: "set-label" }, label), h("span", { class: "set-control" }, ...control));
     return h("div", { class: "card settings" },
       row("Contract hours per week",
-        num(st.weekly_hours, { min: "0", max: "168", step: "0.25", "aria-label": "Contract hours per week" }, (v) => { st.weekly_hours = v || 0; }), perDay),
+        num(st.weekly_hours, { min: "0", max: "168", step: "0.25", "aria-label": "Contract hours per week" }, (v) => { st.weekly_hours = v || 0; }), contractHint),
+      row("Hours per workday",
+        num(st.day_hours, { min: "0.25", max: "24", step: "0.25", "aria-label": "Hours per workday" }, (v) => { st.day_hours = v || 8; }),
+        h("span", { class: "hint inline" }, "Day target and default for new rows")),
       row("Workdays", h("span", { class: "seg" }, dayBtns)),
       row("Balance counts from",
         h("input", {

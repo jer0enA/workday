@@ -5,7 +5,7 @@
   "use strict";
 
   const KEY = "workday-mock-v2";
-  const DEFAULT_SETTINGS = { weekly_hours: 40, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: 42, default_location: null };
+  const DEFAULT_SETTINGS = { weekly_hours: 40, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: 42, default_location: null, day_hours: 8 };
 
   function iso(d) {
     const p = (n) => String(n).padStart(2, "0");
@@ -63,7 +63,7 @@
 
   const settingsOut = () => {
     const st = db.settings;
-    return { ...st, daily_minutes: st.workdays.length ? Math.round((st.weekly_hours * 60) / st.workdays.length) : 0 };
+    return { ...st, day_minutes: Math.round((st.day_hours || 8) * 60), daily_minutes: st.workdays.length ? Math.round((st.weekly_hours * 60) / st.workdays.length) : 0 };
   };
   const parse = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
   function* range(from, to) { for (let d = parse(from); iso(d) <= to; d.setDate(d.getDate() + 1)) yield new Date(d); }

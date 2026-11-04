@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+- **Hours per workday** setting (default 8): used as the day target and the
+  default for new rows and *Fill week*, instead of contract hours divided by
+  workdays (which could give odd values like 7:12).
+
 ## 0.3.2
 
 - **Default location:** choose *Office* or *Remote* on the ⚙ page; days you

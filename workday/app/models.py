@@ -37,6 +37,7 @@ class UserSettings(Base):
     workdays: Mapped[str] = mapped_column(String(7), default="01234")  # Python weekdays, Monday = 0
     balance_start: Mapped[dt.date | None] = mapped_column(Date, default=None)  # None = first logged day
     office_km: Mapped[float | None] = mapped_column(Float, default=None)  # prefilled on office days
+    day_minutes: Mapped[int | None] = mapped_column(Integer, default=None)  # hours per workday; None = 8h
     default_location: Mapped[str | None] = mapped_column(String(10), default=None)  # set on newly logged days
 
 

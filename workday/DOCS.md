@@ -27,7 +27,8 @@ Each user sets these on the ⚙ page in Workday itself:
 
 | Setting | Description |
 | --- | --- |
-| Contract hours per week | E.g. `40` or `36`. Divided evenly over your workdays to get the daily target. `0` turns targets and the balance off. |
+| Contract hours per week | E.g. `40` or `36`. Used for the week and month target and the overtime balance (divided evenly over your workdays). `0` turns these off. |
+| Hours per workday | E.g. `8`. The target shown in the day view and the default for new rows and *Fill week*. |
 | Workdays | The days you normally work. Used for the target, missing days and *Fill week*. |
 | Balance counts from | Start date of the overtime balance. Empty means your first logged day. |
 | Default location | *Office* or *Remote*: set automatically on a day as soon as you start logging it. Leave both off for no default. |
