@@ -54,12 +54,14 @@
     const wrapped = (...a) => { clearTimeout(t); t = setTimeout(run, ms, ...a); };
     // Runs a pending call immediately; no-op when nothing is pending.
     wrapped.flush = () => { if (t !== null) { clearTimeout(t); run(); } };
+    wrapped.pending = () => t !== null;
     return wrapped;
   }
 
   // ---------- API (real backend, falls back to in-browser mock) ----------
 
   let useMock = false;
+  let knownRev = null;
 
   async function call(method, path, body, asText) {
     if (useMock) {
@@ -73,6 +75,8 @@
       body: body !== undefined ? JSON.stringify(body) : undefined,
       credentials: "same-origin",
     });
+    const rev = r.headers.get("X-Workday-Rev");
+    if (rev) knownRev = rev; // our own change: no need to reload for it
     if (!r.ok) {
       let msg = `HTTP ${r.status}`;
       try { const j = await r.json(); if (j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch (_) { /* not json */ }
@@ -95,6 +99,7 @@
 
   const api = {
     me: () => call("GET", "api/me"),
+    rev: () => call("GET", "api/rev"),
     categories: () => call("GET", "api/categories"),
     addCategory: (c) => call("POST", "api/categories", c),
     patchCategory: (id, c) => call("PATCH", `api/categories/${id}`, c),
@@ -179,6 +184,7 @@
   // ---------- day view ----------
 
   let daySave = null;
+  let saving = 0;
 
   async function renderDay({ date }) {
     const rows = (await api.day(date)).map((e, i) => ({ key: `s${i}`, category_id: e.category_id, minutes: e.minutes, note: e.note || "" }));
@@ -194,11 +200,14 @@
 
     const doSave = async () => {
       status.className = "status"; status.textContent = "Saving…";
+      saving++;
       try {
         await api.saveDay(date, rows.map((r) => ({ category_id: r.category_id, minutes: r.minutes, note: r.note.trim() || null })));
         status.className = "status ok"; status.textContent = "✓ Saved";
       } catch (e) {
         status.className = "status err"; status.textContent = `Not saved: ${e.message}`;
+      } finally {
+        saving--;
       }
     };
     daySave = debounce(doSave, 500);
@@ -553,12 +562,40 @@
     else if (ev.key === "ArrowRight") step(1);
   });
 
+  // ---------- live refresh ----------
+  // While the page is visible, poll a tiny change counter and re-render when
+  // another device (e.g. your phone) changed something. Never while editing.
+
+  const REV_POLL_MS = 20000;
+
+  function isEditing() {
+    const el = document.activeElement;
+    const typing = el && app.contains(el) && ["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName);
+    return typing || saving > 0 || (daySave && daySave.pending());
+  }
+
+  async function checkRev() {
+    if (useMock || document.hidden) return;
+    let rev;
+    try { ({ rev } = await api.rev()); } catch (_) { return; }
+    if (knownRev === null) { knownRev = rev; return; }
+    if (rev === knownRev || isEditing()) return; // retried on the next tick
+    knownRev = rev;
+    try { categories = await api.categories(); } catch (_) { return; }
+    render();
+  }
+
+  setInterval(checkRev, REV_POLL_MS);
+  document.addEventListener("visibilitychange", checkRev);
+  window.addEventListener("focus", checkRev);
+
   window.addEventListener("hashchange", render);
   window.addEventListener("beforeunload", () => { if (daySave) daySave.flush(); });
 
   (async () => {
     await detectBackend();
     try { categories = await api.categories(); } catch (e) { app.textContent = `Could not load: ${e.message}`; return; }
+    await checkRev(); // baseline before the first render, so no change slips by
     render();
   })();
 })();

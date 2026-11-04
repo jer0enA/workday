@@ -66,3 +66,18 @@ def test_existing_database_is_migrated_and_claimed(tmp_path, monkeypatch):
         assert [e["note"] for e in c.get("/api/day/2026-11-02", headers=ALICE).json()] == ["Old project"]
         assert c.get("/api/day/2026-11-02", headers=BOB).json() == []
     main.db.engine.dispose()
+
+
+def test_rev_changes_only_for_own_and_shared_changes(client, cats):
+    work = cats["Work"]
+    alice0 = client.get("/api/rev", headers=ALICE).json()["rev"]
+    bob0 = client.get("/api/rev", headers=BOB).json()["rev"]
+
+    r = client.put("/api/day/2026-11-03", json=[{"category_id": work, "minutes": 60}], headers=ALICE)
+    alice1 = client.get("/api/rev", headers=ALICE).json()["rev"]
+    assert alice1 != alice0 and r.headers["x-workday-rev"] == alice1
+    assert client.get("/api/rev", headers=BOB).json()["rev"] == bob0  # Bob's view is unaffected
+
+    # Categories are shared, so a change by Bob reaches Alice too.
+    client.post("/api/categories", json={"name": "Training"}, headers=BOB)
+    assert client.get("/api/rev", headers=ALICE).json()["rev"] != alice1

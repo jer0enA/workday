@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import re
+import secrets
 import time
 from pathlib import Path
 from typing import Annotated
@@ -250,6 +251,23 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
 
     UserDep = Annotated[User, Depends(current_user)]
 
+    # In-memory change counters for live refresh: one per user plus one for the
+    # shared categories. The boot id makes open pages reload after a restart.
+    boot_id = secrets.token_hex(4)
+    revs: dict[str, int] = {}
+
+    def rev_for(user_id: str) -> str:
+        return f"{boot_id}.{revs.get('categories', 0)}.{revs.get(user_id, 0)}"
+
+    def changed(response: Response, key: str, user_id: str) -> None:
+        revs[key] = revs.get(key, 0) + 1
+        # Lets the page that made the change know it is already up to date.
+        response.headers["X-Workday-Rev"] = rev_for(user_id)
+
+    @app.get("/api/rev")
+    def rev(user: UserDep):
+        return {"rev": rev_for(user.id)}
+
     @app.get("/api/me")
     def me(user: UserDep):
         return {"username": user.username, "display_name": user.display_name or user.username}
@@ -261,7 +279,7 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         return session.scalars(select(Category).order_by(Category.sort_order, Category.id)).all()
 
     @app.post("/api/categories", response_model=CategoryOut, status_code=201)
-    def add_category(body: CategoryIn, session: SessionDep):
+    def add_category(body: CategoryIn, session: SessionDep, user: UserDep, response: Response):
         top = session.scalar(select(func.coalesce(func.max(Category.sort_order), -1)))
         cat = Category(name=body.name, color=body.color, sort_order=top + 1)
         session.add(cat)
@@ -270,10 +288,11 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         except IntegrityError:
             session.rollback()
             raise HTTPException(409, "a category with this name already exists") from None
+        changed(response, "categories", user.id)
         return cat
 
     @app.patch("/api/categories/{cat_id}", response_model=CategoryOut)
-    def patch_category(cat_id: int, body: CategoryPatch, session: SessionDep):
+    def patch_category(cat_id: int, body: CategoryPatch, session: SessionDep, user: UserDep, response: Response):
         cat = session.get(Category, cat_id)
         if cat is None:
             raise HTTPException(404, "category not found")
@@ -284,6 +303,7 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         except IntegrityError:
             session.rollback()
             raise HTTPException(409, "a category with this name already exists") from None
+        changed(response, "categories", user.id)
         return cat
 
     # --- days ---
@@ -301,6 +321,7 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         session: SessionDep,
         user: UserDep,
         background: BackgroundTasks,
+        response: Response,
     ):
         if sum(e.minutes for e in body) > DAY_MAX:
             raise HTTPException(422, "day total exceeds 24 hours")
@@ -316,6 +337,7 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         ]
         session.add_all(rows)
         session.commit()
+        changed(response, user.id, user.id)
         if ha and reminder_cfg is not None and day == dt.date.today():
             if reminder_user_id(reminder_cfg.user) == user.id:
                 background.add_task(push_sensor_today, user.id)

@@ -24,6 +24,8 @@ hours went. _4 hours on Project X, 4 hours studying._ Done.
   when you have not logged your hours yet.
 - **Sensor** — `sensor.workday_hours_today` for your own automations.
 - **Personal** — every Home Assistant user keeps their own hours and notes.
+- **Live refresh** — hours logged on your phone appear on your laptop within
+  seconds.
 - **Light and dark mode**, works great in the companion app.
 
 ![Week view](https://raw.githubusercontent.com/jer0enA/workday/main/docs/screenshots/week.png)

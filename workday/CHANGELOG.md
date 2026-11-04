@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5
+
+- Live refresh: changes made on another device (e.g. your phone) show up
+  within about 20 seconds in an open Workday page, without reloading.
+
 ## 0.2.4
 
 - The `1h` / `4h` / `8h` shortcuts now also show on phones, on their own line.
