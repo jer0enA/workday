@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus
@@ -329,21 +330,52 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
 DB_NAME = "workday"
 
 
-def addon_settings() -> tuple[str, reminder.ReminderConfig]:
-    """Resolve DB URL and reminder config from Supervisor (inside Home Assistant)."""
+MYSQL_ATTEMPTS = 30
+MYSQL_RETRY_SECONDS = 10
+
+
+def connect_mysql(attempts: int = MYSQL_ATTEMPTS, delay: float = MYSQL_RETRY_SECONDS, sleep=time.sleep) -> dict:
+    """Get MariaDB credentials from Supervisor and make sure our database exists.
+
+    Retries for a while: at boot this add-on may start before MariaDB does.
+    """
     import pymysql
 
-    info = supervisor.addon_info()
-    mysql = supervisor.mysql_service()
-    conn = pymysql.connect(
-        host=mysql["host"], port=int(mysql["port"]), user=mysql["username"], password=mysql["password"],
+    for attempt in range(1, attempts + 1):
+        try:
+            mysql = supervisor.mysql_service()
+            conn = pymysql.connect(
+                host=mysql["host"], port=int(mysql["port"]), user=mysql["username"], password=mysql["password"],
+                connect_timeout=10,
+            )
+            try:
+                with conn.cursor() as cur:
+                    # DB_NAME is a constant, not user input.
+                    cur.execute(
+                        f"CREATE DATABASE IF NOT EXISTS `{DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    )
+            finally:
+                conn.close()
+            return mysql
+        except supervisor.SupervisorError as e:
+            reason = f"Supervisor did not provide MariaDB credentials ({e.status or 'no response'}: {e.message})"
+        except pymysql.MySQLError as e:
+            reason = f"Could not connect to MariaDB ({e})"
+        if attempt == attempts:
+            break
+        log.warning("%s. Is the MariaDB add-on installed and started? Retrying in %ds (%d/%d)",
+                    reason, delay, attempt, attempts)
+        sleep(delay)
+    raise SystemExit(
+        f"{reason}. Install and start the official MariaDB add-on "
+        "(Settings → Add-ons → Add-on store → MariaDB), then restart Workday."
     )
-    try:
-        with conn.cursor() as cur:
-            # DB_NAME is a constant, not user input.
-            cur.execute(f"CREATE DATABASE IF NOT EXISTS `{DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-    finally:
-        conn.close()
+
+
+def addon_settings() -> tuple[str, reminder.ReminderConfig]:
+    """Resolve DB URL and reminder config from Supervisor (inside Home Assistant)."""
+    info = supervisor.addon_info()
+    mysql = connect_mysql()
     url = (
         f"mysql+pymysql://{quote_plus(mysql['username'])}:{quote_plus(mysql['password'])}"
         f"@{mysql['host']}:{int(mysql['port'])}/{DB_NAME}?charset=utf8mb4"
