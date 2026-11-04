@@ -1,0 +1,5 @@
+app/tests
+app/requirements*.in
+app/requirements-dev.txt
+**/__pycache__
+**/*.db

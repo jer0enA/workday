@@ -1,0 +1,16 @@
+configuration:
+  reminder_enabled:
+    name: End-of-day reminder
+    description: Send a notification when too few hours are logged for today.
+  reminder_time:
+    name: Reminder time
+    description: Time of day (HH:MM, Home Assistant time zone) to check today's hours.
+  reminder_days:
+    name: Reminder days
+    description: Weekdays on which the reminder is active.
+  notify_service:
+    name: Notify service
+    description: Service to call, e.g. notify.mobile_app_my_phone (see Developer tools → Actions).
+  min_hours:
+    name: Minimum hours
+    description: Remind when fewer hours than this are logged. 0 means only when nothing is logged.
