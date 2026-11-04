@@ -11,10 +11,19 @@ updates:
     directory: /workday
     schedule:
       interval: weekly
+    ignore:
+      # Python minor/major upgrades (e.g. 3.14 -> 3.15) are done by hand once
+      # all wheels are available; patch releases still come in automatically.
+      - dependency-name: python
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
   - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Keep the dev DB on the same major version as the one we test against.
+      - dependency-name: mariadb
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

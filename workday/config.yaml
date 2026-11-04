@@ -6,10 +6,7 @@ url: https://github.com/jer0enA/workday
 arch:
   - amd64
   - aarch64
-startup: application
-boot: auto
 ingress: true
-ingress_port: 8099
 panel_icon: mdi:clock-outline
 panel_title: Workday
 homeassistant_api: true
