@@ -30,6 +30,7 @@ Each user sets these on the ⚙ page in Workday itself:
 | Contract hours per week | E.g. `40` or `36`. Divided evenly over your workdays to get the daily target. `0` turns targets and the balance off. |
 | Workdays | The days you normally work. Used for the target, missing days and *Fill week*. |
 | Balance counts from | Start date of the overtime balance. Empty means your first logged day. |
+| Default location | *Office* or *Remote*: set automatically on a day as soon as you start logging it. Leave both off for no default. |
 | Default km on office days | Filled in when you mark a day as *Office* and no km are entered yet. |
 
 All logged hours count towards the target, including Sick, Vacation and

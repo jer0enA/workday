@@ -125,6 +125,7 @@ class SettingsIn(BaseModel):
     workdays: list[int] = Field(max_length=7)
     balance_start: dt.date | None = None
     office_km: float | None = Field(default=None, ge=0, le=MAX_KM)
+    default_location: Literal["office", "remote"] | None = None
 
     @field_validator("weekly_hours")
     @classmethod
@@ -172,6 +173,11 @@ def migrate(engine) -> None:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE entries ADD COLUMN user_id VARCHAR(64) NULL"))
             conn.execute(text("CREATE INDEX ix_entries_user_id ON entries (user_id)"))
+    columns = {c["name"] for c in inspect(engine).get_columns("user_settings")}
+    if "default_location" not in columns:
+        log.info("Migrating: adding user_settings.default_location")
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE user_settings ADD COLUMN default_location VARCHAR(10) NULL"))
 
 
 def minutes_for_day(day: dt.date, user_id: str) -> int:
@@ -196,7 +202,7 @@ def get_settings(session: Session, user_id: str) -> UserSettings:
     if st is None:
         st = UserSettings(
             user_id=user_id, weekly_minutes=DEFAULT_WEEKLY_MINUTES, workdays=DEFAULT_WORKDAYS,
-            balance_start=None, office_km=None,
+            balance_start=None, office_km=None, default_location=None,
         )
     return st
 
@@ -229,6 +235,7 @@ def settings_out(st: UserSettings) -> dict:
         "workdays": sorted(workdays_of(st)),
         "balance_start": st.balance_start.isoformat() if st.balance_start else None,
         "office_km": st.office_km,
+        "default_location": st.default_location,
         "daily_minutes": round(daily_target(st)),
     }
 
@@ -499,6 +506,7 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         st.workdays = "".join(str(d) for d in body.workdays)
         st.balance_start = body.balance_start
         st.office_km = None if body.office_km is None else round(body.office_km, 1)
+        st.default_location = body.default_location
         session.merge(st)
         session.commit()
         changed(response, user.id, user.id)

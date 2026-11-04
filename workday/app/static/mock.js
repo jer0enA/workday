@@ -5,7 +5,7 @@
   "use strict";
 
   const KEY = "workday-mock-v2";
-  const DEFAULT_SETTINGS = { weekly_hours: 40, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: 42 };
+  const DEFAULT_SETTINGS = { weekly_hours: 40, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: 42, default_location: null };
 
   function iso(d) {
     const p = (n) => String(n).padStart(2, "0");

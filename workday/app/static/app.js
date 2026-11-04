@@ -123,7 +123,7 @@
   const app = document.getElementById("app");
   let categories = [];
   // Per-user settings; also used to tell workdays and the daily target.
-  let settings = { weekly_hours: 0, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: null, daily_minutes: 0 };
+  let settings = { weekly_hours: 0, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: null, default_location: null, daily_minutes: 0 };
   const isWorkday = (d) => settings.workdays.includes((d.getDay() + 6) % 7);
   const catById = (id) => categories.find((c) => c.id === id);
   let current = { view: "day" };
@@ -303,6 +303,7 @@
     function copyPrevious() {
       rows.push(...toRows(prev.entries, `c${keySeq++}-`));
       if (!info.location && info.km == null) Object.assign(info, { location: prev.location, km: prev.km });
+      applyDefaultLocation();
       drawList();
       drawMeta();
       changed();
@@ -329,20 +330,30 @@
       const remaining = (target || WORKDAY) - total();
       const minutes = Math.min(remaining >= STEP ? toStep(remaining) : 60, left);
       rows.push({ key: `n${keySeq++}`, category_id: catId, minutes, note: "", focus: true });
+      applyDefaultLocation();
       drawList();
       changed();
     }
 
     // Where you worked and km driven: per day, saved together with the hours.
     const meta = h("div", { class: "day-meta" });
+    const setLocation = (value) => {
+      info.location = value;
+      if (value === "office" && info.km == null && settings.office_km) info.km = settings.office_km;
+    };
+    // A day you start logging gets your default location, unless one is already set.
+    function applyDefaultLocation() {
+      if (info.location || info.km != null || !settings.default_location) return;
+      setLocation(settings.default_location);
+      drawMeta();
+    }
     function drawMeta() {
       const seg = (value, label) => h("button", {
         type: "button",
         class: `seg-btn${info.location === value ? " active" : ""}`,
         "aria-pressed": String(info.location === value),
         onclick: () => {
-          info.location = info.location === value ? null : value;
-          if (info.location === "office" && info.km == null && settings.office_km) info.km = settings.office_km;
+          setLocation(info.location === value ? null : value);
           drawMeta();
           changed();
         },
@@ -650,6 +661,7 @@
       try {
         settings = await api.saveSettings({
           weekly_hours: st.weekly_hours, workdays: st.workdays, balance_start: st.balance_start, office_km: st.office_km,
+          default_location: st.default_location,
         });
         msg.className = "status ok"; msg.textContent = "✓ Saved";
         perDay.textContent = settings.daily_minutes ? `${fmt(settings.daily_minutes)} per workday` : "No contract hours: no target or balance";
@@ -673,6 +685,20 @@
       },
     }, name));
 
+    const locBtns = [["office", "🏢 Office"], ["remote", "🏠 Remote"]].map(([value, label]) => h("button", {
+      type: "button", class: `seg-btn${st.default_location === value ? " active" : ""}`, "aria-pressed": String(st.default_location === value),
+      onclick: () => {
+        st.default_location = st.default_location === value ? null : value;
+        for (const b of locBtns) {
+          const on = b.dataset.value === st.default_location;
+          b.classList.toggle("active", on);
+          b.setAttribute("aria-pressed", String(on));
+        }
+        save();
+      },
+      "data-value": value,
+    }, label));
+
     const row = (label, ...control) => h("div", { class: "set-row" }, h("span", { class: "set-label" }, label), h("span", { class: "set-control" }, ...control));
     return h("div", { class: "card settings" },
       row("Contract hours per week",
@@ -684,6 +710,9 @@
           onchange: (ev) => { st.balance_start = ev.target.value || null; save(); },
         }),
         h("span", { class: "hint inline" }, "Empty: your first logged day")),
+      row("Default location",
+        h("span", { class: "seg", role: "group", "aria-label": "Default location" }, locBtns),
+        h("span", { class: "hint inline" }, "Set on days you start logging")),
       row("Default km on office days",
         num(st.office_km, { min: "0", max: "5000", step: "0.1", placeholder: "e.g. 42", "aria-label": "Default km on office days" }, (v) => { st.office_km = v; })));
   }

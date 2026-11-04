@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- **Default location:** choose *Office* or *Remote* on the ⚙ page; days you
+  start logging get it automatically (you can still change it per day).
+
 ## 0.3.1
 
 - Fix: with a daily target that is not a whole quarter (e.g. 36 h/week = 7:12),

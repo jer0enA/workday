@@ -46,13 +46,16 @@ def test_fill_only_empty_workdays(client, cats):
 def test_settings(client):
     assert client.get("/api/settings").json() == {
         "weekly_hours": 40, "workdays": [0, 1, 2, 3, 4], "balance_start": None, "office_km": None,
-        "daily_minutes": 480,
+        "default_location": None, "daily_minutes": 480,
     }
     new = {"weekly_hours": 36, "workdays": [3, 0, 1, 2, 2], "balance_start": "2025-10-01", "office_km": 35}
     got = client.put("/api/settings", json=new).json()
     assert got["workdays"] == [0, 1, 2, 3] and got["daily_minutes"] == 540 and got["office_km"] == 35
     assert client.put("/api/settings", json={**new, "weekly_hours": 36.1}).status_code == 422
     assert client.put("/api/settings", json={**new, "workdays": [7]}).status_code == 422
+    got = client.put("/api/settings", json={**new, "default_location": "remote"}).json()
+    assert got["default_location"] == "remote"
+    assert client.put("/api/settings", json={**new, "default_location": "home"}).status_code == 422
 
 
 def test_target_balance_and_missing(client, cats):
