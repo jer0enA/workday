@@ -50,5 +50,5 @@ def test_message_and_service_call(monkeypatch):
     domain, service, data = calls[0]
     assert (domain, service) == ("notify", "mobile_app_phone")
     assert data["message"] == "You haven't logged any hours today."
-    assert data["data"]["url"] == "/hassio/ingress/local_workday"
+    assert data["data"]["url"] == "/local_workday"
     assert "4:30" in reminder.build_message(CFG, 270)["message"]

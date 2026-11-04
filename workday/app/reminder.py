@@ -36,7 +36,7 @@ def config_from_options(options: dict, slug: str = "") -> ReminderConfig:
         days=days,
         notify_service=(options.get("notify_service") or "").strip(),
         min_hours=float(options.get("min_hours") or 0),
-        panel_url=f"/hassio/ingress/{slug}" if slug else "",
+        panel_url=f"/{slug}" if slug else "",
         user=(options.get("reminder_user") or "").strip(),
     )
 

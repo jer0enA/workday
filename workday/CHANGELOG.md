@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Tapping the reminder notification opens Workday instead of a 404 page.
+
 ## 0.2.0
 
 - Hours and notes are now per Home Assistant user; categories stay shared.
