@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4
+
+- The `1h` / `4h` / `8h` shortcuts now also show on phones, on their own line.
+
 ## 0.2.3
 
 - Browsers always fetch the latest UI after an update instead of a cached copy.

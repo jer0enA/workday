@@ -435,6 +435,8 @@ table.report { width: 100%; border-collapse: collapse; font-variant-numeric: tab
   .tab { padding: 5px 10px; }
   .navbar .label { min-width: 0; flex: 1; font-size: 16px; }
   .stepper { margin-left: 0; }
-  .entry-top .quick { display: none; }
+  /* Shortcuts get their own line under the stepper, with bigger tap targets. */
+  .entry-top .quick { order: 1; width: 100%; justify-content: flex-end; gap: 6px; }
+  .entry-top .quick button { font-size: 13px; padding: 6px 14px; }
   .entry-top { justify-content: space-between; }
 }

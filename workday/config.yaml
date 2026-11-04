@@ -1,5 +1,5 @@
 name: Workday
-version: "0.2.3"
+version: "0.2.4"
 slug: workday
 description: Log your daily hours in 15-minute steps, with week/month overviews and CSV export.
 url: https://github.com/jer0enA/workday
