@@ -1,5 +1,5 @@
 name: Workday
-version: "0.2.5"
+version: "0.3.0"
 slug: workday
 description: Log your daily hours in 15-minute steps, with week/month overviews and CSV export.
 url: https://github.com/jer0enA/workday
@@ -26,6 +26,7 @@ options:
   notify_service: ""
   min_hours: 0
   reminder_user: ""
+  skip_entity: ""
 schema:
   reminder_enabled: bool
   reminder_time: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
@@ -34,3 +35,4 @@ schema:
   notify_service: str?
   min_hours: float(0,24)
   reminder_user: str?
+  skip_entity: str?

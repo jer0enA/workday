@@ -14,12 +14,12 @@ def test_put_and_get_day(client, cats):
     ]
     r = client.put("/api/day/2026-11-03", json=body)
     assert r.status_code == 200
-    got = client.get("/api/day/2026-11-03").json()
+    got = client.get("/api/day/2026-11-03").json()["entries"]
     assert [(e["minutes"], e["note"]) for e in got] == [(240, "Project X"), (240, None)]
 
     # Replacing the day removes old rows.
     client.put("/api/day/2026-11-03", json=[{"category_id": cats["Sick"], "minutes": 480}])
-    got = client.get("/api/day/2026-11-03").json()
+    got = client.get("/api/day/2026-11-03").json()["entries"]
     assert len(got) == 1 and got[0]["category_id"] == cats["Sick"]
 
 
@@ -66,10 +66,10 @@ def test_report_and_csv(client, cats):
     assert r.headers["content-type"].startswith("text/csv")
     lines = r.content.decode("utf-8-sig").splitlines()
     assert lines == [
-        "date;category;hours;note",
-        "2026-11-02;Work;8;Project X",
-        "2026-11-03;Work;4,5;Project X",
-        "2026-11-03;Study;3,5;'=HYPERLINK(1)",
+        "date;category;hours;note;location;km",
+        "2026-11-02;Work;8;Project X;;",
+        "2026-11-03;Work;4,5;Project X;;",
+        "2026-11-03;Study;3,5;'=HYPERLINK(1);;",
     ]
 
 

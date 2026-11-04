@@ -14,6 +14,8 @@
   const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
   const today = () => iso(new Date());
   const fmt = (m) => `${Math.floor(m / 60)}:${pad(m % 60)}`;
+  const fmtSigned = (m) => `${m < 0 ? "−" : "+"}${fmt(Math.abs(m))}`;
+  const fmtKm = (km) => `${Math.round(km * 10) / 10} km`;
 
   function mondayOf(d) {
     const wd = (d.getDay() + 6) % 7; // Monday = 0
@@ -104,7 +106,11 @@
     addCategory: (c) => call("POST", "api/categories", c),
     patchCategory: (id, c) => call("PATCH", `api/categories/${id}`, c),
     day: (date) => call("GET", `api/day/${date}`),
-    saveDay: (date, entries) => call("PUT", `api/day/${date}`, entries),
+    previousDay: (date) => call("GET", `api/day/${date}/previous`),
+    saveDay: (date, day) => call("PUT", `api/day/${date}`, day),
+    fill: (body) => call("POST", "api/fill", body),
+    settings: () => call("GET", "api/settings"),
+    saveSettings: (st) => call("PUT", "api/settings", st),
     notes: (categoryId, q) => call("GET", `api/notes?category_id=${encodeURIComponent(categoryId)}&q=${encodeURIComponent(q)}`),
     report: (from, to) => call("GET", `api/report?from=${from}&to=${to}`),
     csv: (from, to) => call("GET", `api/export.csv?from=${from}&to=${to}`, undefined, true),
@@ -114,6 +120,9 @@
 
   const app = document.getElementById("app");
   let categories = [];
+  // Per-user settings; also used to tell workdays and the daily target.
+  let settings = { weekly_hours: 0, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: null, daily_minutes: 0 };
+  const isWorkday = (d) => settings.workdays.includes((d.getDay() + 6) % 7);
   const catById = (id) => categories.find((c) => c.id === id);
   let current = { view: "day" };
   let renderToken = 0;
@@ -187,13 +196,20 @@
   let saving = 0;
 
   async function renderDay({ date }) {
-    const rows = (await api.day(date)).map((e, i) => ({ key: `s${i}`, category_id: e.category_id, minutes: e.minutes, note: e.note || "" }));
+    const toRows = (entries, prefix) => entries.map((e, i) => ({ key: `${prefix}${i}`, category_id: e.category_id, minutes: e.minutes, note: e.note || "" }));
+    const loaded = await api.day(date);
+    const rows = toRows(loaded.entries, "s");
+    const info = { location: loaded.location, km: loaded.km };
+    // Offer "copy from …" on an empty day.
+    const prev = rows.length ? null : await api.previousDay(date).catch(() => null);
     let keySeq = 0;
     const d = parseIso(date);
     const isToday = date === today();
+    const target = isWorkday(d) ? settings.daily_minutes : 0;
 
     const status = h("span", { class: "status" });
     const totalEl = h("strong");
+    const targetEl = h("span", { class: "target" });
     const list = h("div", { class: "entries" });
 
     const total = () => rows.reduce((s, r) => s + r.minutes, 0);
@@ -202,7 +218,11 @@
       status.className = "status"; status.textContent = "Saving…";
       saving++;
       try {
-        await api.saveDay(date, rows.map((r) => ({ category_id: r.category_id, minutes: r.minutes, note: r.note.trim() || null })));
+        await api.saveDay(date, {
+          entries: rows.map((r) => ({ category_id: r.category_id, minutes: r.minutes, note: r.note.trim() || null })),
+          location: info.location,
+          km: info.km,
+        });
         status.className = "status ok"; status.textContent = "✓ Saved";
       } catch (e) {
         status.className = "status err"; status.textContent = `Not saved: ${e.message}`;
@@ -216,6 +236,7 @@
 
     function refreshTotals() {
       totalEl.textContent = fmt(total());
+      targetEl.textContent = target ? ` / ${fmt(target)}` : "";
       list.querySelectorAll(".entry").forEach((el) => {
         const r = rows.find((x) => x.key === el.dataset.key);
         if (!r) return;
@@ -277,10 +298,24 @@
       );
     }
 
+    function copyPrevious() {
+      rows.push(...toRows(prev.entries, `c${keySeq++}-`));
+      if (!info.location && info.km == null) Object.assign(info, { location: prev.location, km: prev.km });
+      drawList();
+      drawMeta();
+      changed();
+    }
+
+    function emptyState() {
+      const label = prev && dfmt(parseIso(prev.date), { weekday: "long", day: "numeric", month: "short" });
+      return h("div", { class: "empty" },
+        h("div", {}, "Nothing logged yet. Add a category below."),
+        prev ? h("button", { type: "button", class: "pill-btn copy-btn", onclick: copyPrevious },
+          `⧉ Copy ${label} (${fmt(prev.entries.reduce((s, e) => s + e.minutes, 0))})`) : null);
+    }
+
     function drawList() {
-      list.replaceChildren(...(rows.length
-        ? rows.map(entryEl)
-        : [h("div", { class: "empty" }, "Nothing logged yet. Add a category below.")]));
+      list.replaceChildren(...(rows.length ? rows.map(entryEl) : [emptyState()]));
       refreshTotals();
       const f = list.querySelector("[data-autofocus]");
       if (f && app.contains(list)) f.focus();
@@ -289,14 +324,44 @@
     function addRow(catId) {
       const left = DAY_MAX - total();
       if (left < STEP) return;
-      const remaining = WORKDAY - total();
+      const remaining = (target || WORKDAY) - total();
       const minutes = Math.min(remaining >= STEP ? remaining : 60, left);
       rows.push({ key: `n${keySeq++}`, category_id: catId, minutes, note: "", focus: true });
       drawList();
       changed();
     }
 
+    // Where you worked and km driven: per day, saved together with the hours.
+    const meta = h("div", { class: "day-meta" });
+    function drawMeta() {
+      const seg = (value, label) => h("button", {
+        type: "button",
+        class: `seg-btn${info.location === value ? " active" : ""}`,
+        "aria-pressed": String(info.location === value),
+        onclick: () => {
+          info.location = info.location === value ? null : value;
+          if (info.location === "office" && info.km == null && settings.office_km) info.km = settings.office_km;
+          drawMeta();
+          changed();
+        },
+      }, label);
+      const km = h("input", {
+        type: "number", class: "km-input", min: "0", max: "5000", step: "0.1", inputmode: "decimal",
+        placeholder: "0", value: info.km == null ? "" : String(info.km), "aria-label": "Kilometres driven",
+        oninput: (ev) => {
+          const v = ev.target.value === "" ? null : Number(ev.target.value);
+          info.km = v == null || Number.isNaN(v) || v < 0 ? null : Math.min(v, 5000);
+          daySave();
+        },
+      });
+      meta.replaceChildren(
+        h("div", { class: "seg", role: "group", "aria-label": "Location" }, seg("office", "🏢 Office"), seg("remote", "🏠 Remote")),
+        h("label", { class: "km" }, km, " km driven"),
+      );
+    }
+
     drawList();
+    drawMeta();
 
     const addRow_ = h("div", { class: "add-row" },
       categories.filter((c) => !c.archived).map((c) =>
@@ -311,8 +376,9 @@
       ),
       list,
       addRow_,
+      meta,
       h("div", { class: "day-footer" },
-        h("span", { class: "total" }, "Total", totalEl),
+        h("span", { class: "total" }, "Total", totalEl, targetEl),
         status,
       ),
     );
@@ -376,7 +442,7 @@
 
   // columns: [{key, head, sub, days: [iso...], onclick, cls}]
   function reportTable(report, columns) {
-    if (!report.categories.length) {
+    if (!report.categories.length && !Object.keys(report.day_info).length) {
       return h("div", { class: "card report-empty" }, "No hours logged in this period.");
     }
     const sum = (days, src) => days.reduce((s, d) => s + (src[d] || 0), 0);
@@ -421,16 +487,97 @@
       cell(report.total, "sum"),
     ));
 
+    // Office / remote days and km driven, only when any were recorded.
+    const info = Object.entries(report.day_info);
+    const infoRow = (label, value, show) => h("tr", { class: "info" },
+      h("td", {}, label),
+      columns.map((col) => { const v = col.days.reduce((n, d) => n + value(report.day_info[d]), 0); return h("td", { class: v ? "" : "zero" }, v ? show(v) : "–"); }),
+      (() => { const v = info.reduce((n, [, i]) => n + value(i), 0); return h("td", { class: `sum${v ? "" : " zero"}` }, v ? show(v) : "–"); })(),
+    );
+    const count = (loc) => (i) => (i && i.location === loc ? 1 : 0);
+    const kmOf = (i) => (i && i.km) || 0;
+    const infoRows = [];
+    if (info.some(([, i]) => i.location === "office")) infoRows.push(infoRow("🏢 Office days", count("office"), String));
+    if (info.some(([, i]) => i.location === "remote")) infoRows.push(infoRow("🏠 Remote days", count("remote"), String));
+    if (info.some(([, i]) => i.km)) infoRows.push(infoRow("🚗 km driven", kmOf, (v) => String(Math.round(v * 10) / 10)));
+    tfoot.append(...infoRows);
+
     return h("div", { class: "card table-wrap" }, h("table", { class: "report" }, thead, tbody, tfoot));
   }
 
-  function reportSection(nav, from, to, table) {
+  // Logged vs. contract hours for the period, and the running overtime balance.
+  function summaryTiles(report) {
+    const tile = (label, value, cls, title) => h("div", { class: `stat ${cls || ""}`, title },
+      h("span", { class: "stat-label" }, label), h("span", { class: "stat-value" }, value));
+    const tiles = [tile("Logged", fmt(report.total))];
+    if (report.target) {
+      tiles.push(tile("Target", fmt(report.target)));
+      const partial = report.target_to_date !== report.target;
+      const diff = report.logged_to_date - report.target_to_date;
+      tiles.push(tile(partial ? "Difference so far" : "Difference", fmtSigned(diff), diff < 0 ? "neg" : "pos",
+        partial ? "Logged up to today versus the target up to today" : null));
+    }
+    if (report.balance != null) {
+      const since = dfmt(parseIso(report.balance_since), { day: "numeric", month: "short", year: "numeric" });
+      tiles.push(tile("Overtime balance", fmtSigned(report.balance), report.balance < 0 ? "neg" : "pos",
+        `All hours since ${since} versus your contract hours, up to the end of this period or today`));
+    }
+    return h("div", { class: "stats" }, tiles);
+  }
+
+  function missingDays(report) {
+    if (!report.missing.length) return null;
+    return h("div", { class: "missing-days" },
+      h("span", { class: "missing-label" }, "Not logged yet:"),
+      report.missing.map((k) => h("button", { type: "button", class: "chip", onclick: () => go({ view: "day", date: k }) },
+        dfmt(parseIso(k), { weekday: "short", day: "numeric", month: "short" }))));
+  }
+
+  function reportSection(nav, from, to, report, table, extraAction, panel) {
     return h("section", {},
       nav,
+      summaryTiles(report),
+      missingDays(report),
       h("div", { class: "report-actions" },
+        extraAction || null,
         h("button", { type: "button", class: "pill-btn", onclick: () => exportCsv(from, to).catch((e) => alert(e.message)) }, "⤓ Export CSV")),
+      panel || null,
       table,
     );
+  }
+
+  // "Fill week": the same hours on every workday that has nothing logged yet.
+  function fillPanel(from, to, report, days) {
+    const empty = days.filter((d) => isWorkday(d) && !report.day_totals[iso(d)]);
+    const usable = categories.filter((c) => !c.archived);
+    const vacation = usable.find((c) => /vacation/i.test(c.name)) || usable[0];
+    let minutes = settings.daily_minutes ? Math.round(settings.daily_minutes / STEP) * STEP : WORKDAY;
+    const catSel = h("select", { class: "field", "aria-label": "Category" },
+      usable.map((c) => h("option", { value: String(c.id), selected: c === vacation }, c.name)));
+    const hoursEl = h("span", { class: "hours" }, fmt(minutes));
+    const setM = (m) => { minutes = Math.max(STEP, Math.min(m, DAY_MAX)); hoursEl.textContent = fmt(minutes); };
+    const note = h("input", { type: "text", class: "field", maxlength: "200", placeholder: "Note (optional)" });
+    const msg = h("span", { class: "status" });
+    const go_ = h("button", {
+      type: "button", class: "pill-btn primary", disabled: !empty.length,
+      onclick: async () => {
+        go_.disabled = true;
+        try {
+          await api.fill({ from, to, category_id: Number(catSel.value), minutes, note: note.value.trim() || null });
+          render();
+        } catch (e) { msg.className = "status err"; msg.textContent = e.message; go_.disabled = false; }
+      },
+    }, empty.length ? `Fill ${empty.length} empty workday${empty.length === 1 ? "" : "s"}` : "No empty workdays");
+    return h("div", { class: "card fill-panel", hidden: true },
+      h("div", { class: "fill-row" },
+        catSel,
+        h("span", { class: "stepper" },
+          h("button", { type: "button", class: "step-btn", "aria-label": "Less", onclick: () => setM(minutes - STEP) }, "−"),
+          hoursEl,
+          h("button", { type: "button", class: "step-btn", "aria-label": "More", onclick: () => setM(minutes + STEP) }, "+")),
+        note),
+      h("div", { class: "fill-row end" }, msg, go_),
+      h("div", { class: "hint" }, "Days that already have hours, and days that are not workdays (see ⚙), are left alone."));
   }
 
   async function renderWeek({ start }) {
@@ -442,21 +589,22 @@
     const t = today();
     const columns = days.map((d) => {
       const k = iso(d);
-      const wd = d.getDay();
       return {
         days: [k],
         head: dfmt(d, { weekday: "short" }),
         sub: String(d.getDate()),
-        cls: [k === t ? "today" : "", wd === 0 || wd === 6 ? "weekend" : ""].filter(Boolean).join(" "),
+        cls: [k === t ? "today" : "", isWorkday(d) ? "" : "weekend", report.missing.includes(k) ? "missing" : ""].filter(Boolean).join(" "),
         onclick: () => go({ view: "day", date: k }),
       };
     });
     const range = `${dfmt(days[0], { day: "numeric", month: "short" })} – ${dfmt(days[6], { day: "numeric", month: "short", year: "numeric" })}`;
     const thisWeek = from === iso(mondayOf(new Date()));
+    const panel = fillPanel(from, to, report, days);
+    const fillBtn = h("button", { type: "button", class: "pill-btn", onclick: () => { panel.hidden = !panel.hidden; } }, "▦ Fill week…");
     return reportSection(
       navbar(`Week ${isoWeek(s)}`, range,
         h("button", { type: "button", class: "pill-btn", disabled: thisWeek, onclick: () => go({ view: "week", start: iso(mondayOf(new Date())) }) }, "This week")),
-      from, to, reportTable(report, columns));
+      from, to, report, reportTable(report, columns), fillBtn, panel);
   }
 
   async function renderMonth({ month }) {
@@ -484,14 +632,64 @@
     return reportSection(
       navbar(dfmt(first, { month: "long" }), String(y),
         h("button", { type: "button", class: "pill-btn", disabled: thisMonth, onclick: () => go({ view: "month", month: today().slice(0, 7) }) }, "This month")),
-      from, to, reportTable(report, columns));
+      from, to, report, reportTable(report, columns));
   }
 
   // ---------- categories ----------
 
+  // Contract hours, workdays, balance start and default office km.
+  const settingsStatus = h("span", { class: "status" });
+  function settingsCard() {
+    settingsStatus.textContent = "";
+    const st = { ...settings };
+    const msg = settingsStatus;
+    const save = debounce(async () => {
+      msg.className = "status"; msg.textContent = "Saving…";
+      try {
+        settings = await api.saveSettings({
+          weekly_hours: st.weekly_hours, workdays: st.workdays, balance_start: st.balance_start, office_km: st.office_km,
+        });
+        msg.className = "status ok"; msg.textContent = "✓ Saved";
+        perDay.textContent = settings.daily_minutes ? `${fmt(settings.daily_minutes)} per workday` : "No contract hours: no target or balance";
+      } catch (e) { msg.className = "status err"; msg.textContent = `Not saved: ${e.message}`; }
+    }, 400);
+    const num = (value, attrs, onval) => h("input", {
+      type: "number", class: "field num", value: value == null ? "" : String(value), ...attrs,
+      oninput: (ev) => { const v = ev.target.value === "" ? null : Number(ev.target.value); if (v == null || !Number.isNaN(v)) { onval(v); save(); } },
+    });
+    const perDay = h("span", { class: "hint inline" });
+    perDay.textContent = settings.daily_minutes ? `${fmt(settings.daily_minutes)} per workday` : "No contract hours: no target or balance";
+
+    const dayNames = [...Array(7)].map((_, i) => dfmt(addDays(mondayOf(new Date()), i), { weekday: "short" }));
+    const dayBtns = dayNames.map((name, i) => h("button", {
+      type: "button", class: `seg-btn${st.workdays.includes(i) ? " active" : ""}`, "aria-pressed": String(st.workdays.includes(i)),
+      onclick: (ev) => {
+        st.workdays = st.workdays.includes(i) ? st.workdays.filter((x) => x !== i) : [...st.workdays, i].sort();
+        ev.currentTarget.classList.toggle("active");
+        ev.currentTarget.setAttribute("aria-pressed", String(st.workdays.includes(i)));
+        save();
+      },
+    }, name));
+
+    const row = (label, ...control) => h("div", { class: "set-row" }, h("span", { class: "set-label" }, label), h("span", { class: "set-control" }, ...control));
+    return h("div", { class: "card settings" },
+      row("Contract hours per week",
+        num(st.weekly_hours, { min: "0", max: "168", step: "0.25", "aria-label": "Contract hours per week" }, (v) => { st.weekly_hours = v || 0; }), perDay),
+      row("Workdays", h("span", { class: "seg" }, dayBtns)),
+      row("Balance counts from",
+        h("input", {
+          type: "date", class: "field", value: st.balance_start || "", "aria-label": "Balance counts from",
+          onchange: (ev) => { st.balance_start = ev.target.value || null; save(); },
+        }),
+        h("span", { class: "hint inline" }, "Empty: your first logged day")),
+      row("Default km on office days",
+        num(st.office_km, { min: "0", max: "5000", step: "0.1", placeholder: "e.g. 42", "aria-label": "Default km on office days" }, (v) => { st.office_km = v; })));
+  }
+
   async function renderCategories() {
-    const [cats, me] = await Promise.all([api.categories(), api.me().catch(() => null)]);
+    const [cats, me, st] = await Promise.all([api.categories(), api.me().catch(() => null), api.settings().catch(() => null)]);
     categories = cats;
+    if (st) settings = st;
     const msg = h("div", { class: "hint" }, "Archived categories are hidden when logging, but stay visible in reports.");
 
     const update = async (c, patch) => {
@@ -533,7 +731,9 @@
     nameIn.addEventListener("keydown", (ev) => { if (ev.key === "Enter") add(); });
 
     return h("section", {},
-      h("h2", { class: "section-title" }, "Categories"),
+      h("h2", { class: "section-title with-status" }, "My hours", settingsStatus),
+      settingsCard(),
+      h("h2", { class: "section-title spaced" }, "Categories"),
       listEl,
       h("div", { class: "new-cat" }, nameIn, h("button", { type: "button", class: "pill-btn primary", onclick: add }, "Add")),
       msg,
@@ -581,7 +781,7 @@
     if (knownRev === null) { knownRev = rev; return; }
     if (rev === knownRev || isEditing()) return; // retried on the next tick
     knownRev = rev;
-    try { categories = await api.categories(); } catch (_) { return; }
+    try { [categories, settings] = await Promise.all([api.categories(), api.settings()]); } catch (_) { return; }
     render();
   }
 
@@ -594,7 +794,9 @@
 
   (async () => {
     await detectBackend();
-    try { categories = await api.categories(); } catch (e) { app.textContent = `Could not load: ${e.message}`; return; }
+    try {
+      [categories, settings] = await Promise.all([api.categories(), api.settings()]);
+    } catch (e) { app.textContent = `Could not load: ${e.message}`; return; }
     await checkRev(); // baseline before the first render, so no change slips by
     render();
   })();

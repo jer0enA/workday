@@ -9,7 +9,7 @@ import re
 import secrets
 import time
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote_plus
 
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query, Request
@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 import db
 import reminder
 import supervisor
-from models import DEFAULT_CATEGORIES, Category, Entry, User
+from models import DEFAULT_CATEGORIES, Category, DayInfo, Entry, User, UserSettings
 
 log = logging.getLogger("workday")
 
@@ -32,6 +32,10 @@ INGRESS_PROXY = "172.30.32.2"
 STEP = 15
 DAY_MAX = 24 * 60
 MAX_RANGE_DAYS = 400
+MAX_FILL_DAYS = 62
+MAX_KM = 5000
+DEFAULT_WEEKLY_MINUTES = 40 * 60
+DEFAULT_WORKDAYS = "01234"  # Monday-Friday
 COLOR_RE = r"^#[0-9a-fA-F]{6}$"
 USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 DEV_USER = {"id": "dev", "username": "dev", "display_name": "Developer"}
@@ -110,6 +114,46 @@ class EntryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DayIn(BaseModel):
+    entries: list[EntryIn] = Field(default_factory=list, max_length=50)
+    location: Literal["office", "remote"] | None = None
+    km: float | None = Field(default=None, ge=0, le=MAX_KM)
+
+
+class SettingsIn(BaseModel):
+    weekly_hours: float = Field(ge=0, le=168)
+    workdays: list[int] = Field(max_length=7)
+    balance_start: dt.date | None = None
+    office_km: float | None = Field(default=None, ge=0, le=MAX_KM)
+
+    @field_validator("weekly_hours")
+    @classmethod
+    def quarter_hours(cls, v: float) -> float:
+        if round(v * 60) % STEP:
+            raise ValueError("weekly hours must be in steps of 0.25")
+        return v
+
+    @field_validator("workdays")
+    @classmethod
+    def valid_days(cls, v: list[int]) -> list[int]:
+        if any(d < 0 or d > 6 for d in v):
+            raise ValueError("workdays are 0 (Monday) to 6 (Sunday)")
+        return sorted(set(v))
+
+
+class FillIn(BaseModel):
+    start: dt.date = Field(alias="from")
+    end: dt.date = Field(alias="to")
+    category_id: int
+    minutes: int = Field(ge=STEP, le=DAY_MAX, multiple_of=STEP)
+    note: str | None = Field(default=None, max_length=200)
+
+    @field_validator("note")
+    @classmethod
+    def clean_note(cls, v: str | None) -> str | None:
+        return EntryIn.clean_note(v)
+
+
 # ---------- helpers ----------
 
 def seed_categories(session: Session) -> None:
@@ -145,6 +189,52 @@ def reminder_user_id(username: str) -> str | None:
             return session.scalar(select(User.id).where(func.lower(User.username) == username.lower()))
         ids = session.scalars(select(User.id).limit(2)).all()
         return ids[0] if len(ids) == 1 else None
+
+
+def get_settings(session: Session, user_id: str) -> UserSettings:
+    st = session.get(UserSettings, user_id)
+    if st is None:
+        st = UserSettings(
+            user_id=user_id, weekly_minutes=DEFAULT_WEEKLY_MINUTES, workdays=DEFAULT_WORKDAYS,
+            balance_start=None, office_km=None,
+        )
+    return st
+
+
+def workdays_of(st: UserSettings) -> set[int]:
+    return {int(c) for c in st.workdays}
+
+
+def daily_target(st: UserSettings) -> float:
+    """Contract minutes per workday (0 without contract hours)."""
+    days = workdays_of(st)
+    return st.weekly_minutes / len(days) if days else 0
+
+
+def date_range(start: dt.date, end: dt.date):
+    d = start
+    while d <= end:
+        yield d
+        d += dt.timedelta(days=1)
+
+
+def target_minutes(st: UserSettings, start: dt.date, end: dt.date) -> int:
+    days = workdays_of(st)
+    return round(sum(daily_target(st) for d in date_range(start, end) if d.weekday() in days))
+
+
+def settings_out(st: UserSettings) -> dict:
+    return {
+        "weekly_hours": st.weekly_minutes / 60,
+        "workdays": sorted(workdays_of(st)),
+        "balance_start": st.balance_start.isoformat() if st.balance_start else None,
+        "office_km": st.office_km,
+        "daily_minutes": round(daily_target(st)),
+    }
+
+
+def format_km(km: float | None) -> str:
+    return "" if km is None else f"{km:g}".replace(".", ",")
 
 
 def check_range(start: dt.date, end: dt.date) -> None:
@@ -308,40 +398,111 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
 
     # --- days ---
 
-    @app.get("/api/day/{day}", response_model=list[EntryOut])
-    def get_day(day: dt.date, session: SessionDep, user: UserDep):
-        return session.scalars(
+    def day_out(session: Session, user: User, day: dt.date) -> dict:
+        entries = session.scalars(
             select(Entry).where(Entry.date == day, Entry.user_id == user.id).order_by(Entry.id)
         ).all()
+        info = session.get(DayInfo, (user.id, day))
+        return {
+            "date": day.isoformat(),
+            "entries": [EntryOut.model_validate(e).model_dump(mode="json") for e in entries],
+            "location": info.location if info else None,
+            "km": info.km if info else None,
+        }
 
-    @app.put("/api/day/{day}", response_model=list[EntryOut])
+    def check_categories(session: Session, ids: set[int]) -> None:
+        if ids and ids - set(session.scalars(select(Category.id).where(Category.id.in_(ids)))):
+            raise HTTPException(422, "unknown category")
+
+    def maybe_push_sensor(days, user: User, background: BackgroundTasks) -> None:
+        if ha and reminder_cfg is not None and dt.date.today() in days:
+            if reminder_user_id(reminder_cfg.user) == user.id:
+                background.add_task(push_sensor_today, user.id)
+
+    @app.get("/api/day/{day}")
+    def get_day(day: dt.date, session: SessionDep, user: UserDep):
+        return day_out(session, user, day)
+
+    @app.get("/api/day/{day}/previous")
+    def previous_day(day: dt.date, session: SessionDep, user: UserDep):
+        """The most recent earlier day with hours, for "copy from …"."""
+        prev = session.scalar(select(func.max(Entry.date)).where(Entry.user_id == user.id, Entry.date < day))
+        return day_out(session, user, prev) if prev else None
+
+    @app.put("/api/day/{day}")
     def put_day(
         day: dt.date,
-        body: Annotated[list[EntryIn], Body(max_length=50)],
+        body: Annotated[DayIn | Annotated[list[EntryIn], Field(max_length=50)], Body()],
         session: SessionDep,
         user: UserDep,
         background: BackgroundTasks,
         response: Response,
     ):
-        if sum(e.minutes for e in body) > DAY_MAX:
+        # A bare list (older clients) only replaces the hours and keeps location/km.
+        entries = body if isinstance(body, list) else body.entries
+        if sum(e.minutes for e in entries) > DAY_MAX:
             raise HTTPException(422, "day total exceeds 24 hours")
-        ids = {e.category_id for e in body}
-        if ids:
-            known = set(session.scalars(select(Category.id).where(Category.id.in_(ids))))
-            if ids - known:
-                raise HTTPException(422, "unknown category")
+        check_categories(session, {e.category_id for e in entries})
         for old in session.scalars(select(Entry).where(Entry.date == day, Entry.user_id == user.id)):
             session.delete(old)
-        rows = [
-            Entry(user_id=user.id, date=day, category_id=e.category_id, minutes=e.minutes, note=e.note) for e in body
-        ]
-        session.add_all(rows)
+        session.add_all(
+            Entry(user_id=user.id, date=day, category_id=e.category_id, minutes=e.minutes, note=e.note)
+            for e in entries
+        )
+        if isinstance(body, DayIn):
+            info = session.get(DayInfo, (user.id, day))
+            km = None if body.km is None else round(body.km, 1)
+            if body.location is None and km is None:
+                if info is not None:
+                    session.delete(info)
+            elif info is None:
+                session.add(DayInfo(user_id=user.id, date=day, location=body.location, km=km))
+            else:
+                info.location, info.km = body.location, km
         session.commit()
         changed(response, user.id, user.id)
-        if ha and reminder_cfg is not None and day == dt.date.today():
-            if reminder_user_id(reminder_cfg.user) == user.id:
-                background.add_task(push_sensor_today, user.id)
-        return rows
+        maybe_push_sensor([day], user, background)
+        return day_out(session, user, day)
+
+    @app.post("/api/fill")
+    def fill(body: FillIn, session: SessionDep, user: UserDep, background: BackgroundTasks, response: Response):
+        """Log the same hours on every workday in a range that has nothing logged yet."""
+        check_range(body.start, body.end)
+        if (body.end - body.start).days >= MAX_FILL_DAYS:
+            raise HTTPException(422, f"fill at most {MAX_FILL_DAYS} days at once")
+        check_categories(session, {body.category_id})
+        workdays = workdays_of(get_settings(session, user.id))
+        logged = set(session.scalars(
+            select(Entry.date).where(Entry.user_id == user.id, Entry.date >= body.start, Entry.date <= body.end)
+        ))
+        days = [d for d in date_range(body.start, body.end) if d.weekday() in workdays and d not in logged]
+        session.add_all(
+            Entry(user_id=user.id, date=d, category_id=body.category_id, minutes=body.minutes, note=body.note)
+            for d in days
+        )
+        session.commit()
+        if days:
+            changed(response, user.id, user.id)
+            maybe_push_sensor(days, user, background)
+        return {"filled": [d.isoformat() for d in days]}
+
+    # --- settings ---
+
+    @app.get("/api/settings")
+    def read_settings(session: SessionDep, user: UserDep):
+        return settings_out(get_settings(session, user.id))
+
+    @app.put("/api/settings")
+    def write_settings(body: SettingsIn, session: SessionDep, user: UserDep, response: Response):
+        st = get_settings(session, user.id)
+        st.weekly_minutes = round(body.weekly_hours * 60)
+        st.workdays = "".join(str(d) for d in body.workdays)
+        st.balance_start = body.balance_start
+        st.office_km = None if body.office_km is None else round(body.office_km, 1)
+        session.merge(st)
+        session.commit()
+        changed(response, user.id, user.id)
+        return settings_out(st)
 
     # --- note suggestions ---
 
@@ -401,6 +562,43 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         return {
             "from": start.isoformat(), "to": end.isoformat(), "total": total,
             "day_totals": day_totals, "categories": categories,
+            **contract_report(session, user, start, end, day_totals),
+        }
+
+    def contract_report(session: Session, user: User, start: dt.date, end: dt.date, day_totals: dict) -> dict:
+        """Target hours, overtime balance, unlogged workdays and office/remote/km for a range."""
+        st = get_settings(session, user.id)
+        today = dt.date.today()
+        upto = min(end, today)
+        first = session.scalar(select(func.min(Entry.date)).where(Entry.user_id == user.id))
+        since = st.balance_start or first
+        workdays = workdays_of(st)
+
+        missing = []
+        if since is not None:
+            missing = [
+                d.isoformat() for d in date_range(max(start, since), upto)
+                if d.weekday() in workdays and d.isoformat() not in day_totals
+            ]
+        balance = None
+        if st.weekly_minutes and since is not None and since <= upto:
+            logged = session.scalar(
+                select(func.coalesce(func.sum(Entry.minutes), 0))
+                .where(Entry.user_id == user.id, Entry.date >= since, Entry.date <= upto)
+            )
+            balance = int(logged or 0) - target_minutes(st, since, upto)
+
+        infos = session.scalars(
+            select(DayInfo).where(DayInfo.user_id == user.id, DayInfo.date >= start, DayInfo.date <= end)
+        ).all()
+        return {
+            "target": target_minutes(st, start, end) if st.weekly_minutes else 0,
+            "target_to_date": target_minutes(st, start, upto) if st.weekly_minutes and start <= upto else 0,
+            "logged_to_date": sum(m for d, m in day_totals.items() if d <= upto.isoformat()),
+            "balance": balance,
+            "balance_since": since.isoformat() if since and balance is not None else None,
+            "missing": missing,
+            "day_info": {i.date.isoformat(): {"location": i.location, "km": i.km} for i in infos},
         }
 
     @app.get("/api/export.csv")
@@ -413,10 +611,22 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         check_range(start, end)
         buf = io.StringIO()
         writer = csv.writer(buf, delimiter=";", lineterminator="\r\n")
-        writer.writerow(["date", "category", "hours", "note"])
+        writer.writerow(["date", "category", "hours", "note", "location", "km"])
+        infos = {
+            i.date: i for i in session.scalars(
+                select(DayInfo).where(DayInfo.user_id == user.id, DayInfo.date >= start, DayInfo.date <= end)
+            )
+        }
+        rows: dict[dt.date, list] = {}
         for entry, cat in range_entries(session, user, start, end):
             hours = f"{entry.minutes / 60:g}".replace(".", ",")
-            writer.writerow([entry.date.isoformat(), csv_cell(cat.name), hours, csv_cell(entry.note or "")])
+            rows.setdefault(entry.date, []).append([csv_cell(cat.name), hours, csv_cell(entry.note or "")])
+        for day in sorted(rows.keys() | infos.keys()):
+            info = infos.get(day)
+            # Location and km are per day: only on the day's first row, so km sums correctly.
+            extra = [info.location or "", format_km(info.km)] if info else ["", ""]
+            for i, row in enumerate(rows.get(day) or [["", "", ""]]):
+                writer.writerow([day.isoformat(), *row, *(extra if i == 0 else ["", ""])])
         filename = f"workday_{start.isoformat()}_{end.isoformat()}.csv"
         return Response(
             "﻿" + buf.getvalue(),

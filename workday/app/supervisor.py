@@ -71,5 +71,9 @@ def call_service(domain: str, service: str, data: dict) -> None:
     _request("POST", f"/core/api/services/{domain}/{service}", data)
 
 
+def get_state(entity_id: str) -> dict:
+    return _request("GET", f"/core/api/states/{entity_id}")
+
+
 def set_state(entity_id: str, state: str, attributes: dict) -> None:
     _request("POST", f"/core/api/states/{entity_id}", {"state": state, "attributes": attributes})

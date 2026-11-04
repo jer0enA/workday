@@ -18,10 +18,15 @@ hours went. _4 hours on Project X, 4 hours studying._ Done.
 - **Browse days** — `‹` / `›` buttons or the arrow keys, plus a _Today_ button.
 - **Week and month overviews** — totals per category and per day or week;
   expand a category to see the hours per note (e.g. per project).
+- **Copy previous day** and **fill week** — log a normal day or a vacation
+  week in one tap.
+- **Contract hours and overtime** — see logged versus target hours per week and
+  month, your running overtime balance and the workdays you still have to log.
+- **Office or remote, km driven** — per day, with totals per week and month.
 - **CSV export** — download the week or month you are looking at. Opens
   directly in Excel (`;`-separated, decimal comma).
 - **End-of-day reminder** — get a notification on your phone at, say, 18:00
-  when you have not logged your hours yet.
+  when you have not logged your hours yet; skipped while you are on vacation.
 - **Sensor** — `sensor.workday_hours_today` for your own automations.
 - **Personal** — every Home Assistant user keeps their own hours and notes.
 - **Live refresh** — hours logged on your phone appear on your laptop within

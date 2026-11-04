@@ -21,6 +21,29 @@ categories is shared. Non-admin users can open Workday too. Hours logged
 before version 0.2.0 belong to the first user who opens Workday after the
 update.
 
+## Your settings (⚙)
+
+Each user sets these on the ⚙ page in Workday itself:
+
+| Setting | Description |
+| --- | --- |
+| Contract hours per week | E.g. `40` or `36`. Divided evenly over your workdays to get the daily target. `0` turns targets and the balance off. |
+| Workdays | The days you normally work. Used for the target, missing days and *Fill week*. |
+| Balance counts from | Start date of the overtime balance. Empty means your first logged day. |
+| Default km on office days | Filled in when you mark a day as *Office* and no km are entered yet. |
+
+All logged hours count towards the target, including Sick, Vacation and
+Public holiday. The overtime balance adds up logged minus target hours from
+the start date until the end of the period you are looking at (or today).
+Days before your first logged day are never reported as missing.
+
+## Office, remote and km
+
+On the day view, mark the day as **Office** or **Remote** and enter the km you
+drove. Week and month views count office and remote days and add up the km.
+In the CSV export, `location` and `km` are on the first row of each day, so
+summing the `km` column gives the right total.
+
 ## End-of-day reminder
 
 | Option | Description |
@@ -31,6 +54,7 @@ update.
 | `notify_service` | Notify action, e.g. `notify.mobile_app_my_phone`. Find yours under *Developer tools → Actions*. |
 | `min_hours` | Remind when fewer hours are logged. `0` = only when nothing is logged. |
 | `reminder_user` | Home Assistant **username** whose hours are checked. Leave empty when you are the only Workday user. |
+| `skip_entity` | No reminder while this entity is `on`, e.g. `input_boolean.vacation`, or `calendar.vacation` during an event. Separate several with commas. |
 
 Tapping the notification opens Workday. Restart the add-on after changing options.
 

@@ -15,8 +15,8 @@ def test_users_see_only_their_own_hours(client, cats):
     client.put("/api/day/2026-11-03", json=alice_day, headers=ALICE)
     client.put("/api/day/2026-11-03", json=bob_day, headers=BOB)
 
-    assert [e["note"] for e in client.get("/api/day/2026-11-03", headers=ALICE).json()] == ["Alice project"]
-    assert [e["note"] for e in client.get("/api/day/2026-11-03", headers=BOB).json()] == ["Bob project"]
+    assert [e["note"] for e in client.get("/api/day/2026-11-03", headers=ALICE).json()["entries"]] == ["Alice project"]
+    assert [e["note"] for e in client.get("/api/day/2026-11-03", headers=BOB).json()["entries"]] == ["Bob project"]
     assert client.get(f"/api/notes?category_id={work}&q=", headers=BOB).json() == ["Bob project"]
     rep = client.get("/api/report?from=2026-11-02&to=2026-11-08", headers=ALICE).json()
     assert rep["total"] == 480
@@ -25,7 +25,7 @@ def test_users_see_only_their_own_hours(client, cats):
 
     # Replacing a day only touches your own rows.
     client.put("/api/day/2026-11-03", json=[], headers=BOB)
-    assert len(client.get("/api/day/2026-11-03", headers=ALICE).json()) == 1
+    assert len(client.get("/api/day/2026-11-03", headers=ALICE).json()["entries"]) == 1
 
 
 def test_me_and_user_registry(client):
@@ -63,8 +63,8 @@ def test_existing_database_is_migrated_and_claimed(tmp_path, monkeypatch):
     app = main.create_app(f"sqlite:///{path}", dev_mode=True)
     with TestClient(app) as c:
         # The first user to open Workday gets the hours from before per-user support.
-        assert [e["note"] for e in c.get("/api/day/2026-11-02", headers=ALICE).json()] == ["Old project"]
-        assert c.get("/api/day/2026-11-02", headers=BOB).json() == []
+        assert [e["note"] for e in c.get("/api/day/2026-11-02", headers=ALICE).json()["entries"]] == ["Old project"]
+        assert c.get("/api/day/2026-11-02", headers=BOB).json()["entries"] == []
     main.db.engine.dispose()
 
 

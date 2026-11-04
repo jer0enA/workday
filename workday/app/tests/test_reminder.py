@@ -52,3 +52,19 @@ def test_message_and_service_call(monkeypatch):
     assert data["message"] == "You haven't logged any hours today."
     assert data["data"]["url"] == "/local_workday"
     assert "4:30" in reminder.build_message(CFG, 270)["message"]
+
+
+def test_skip_entities(monkeypatch):
+    cfg = reminder.config_from_options({"skip_entity": "input_boolean.vacation, calendar.Off ,bad/../x"})
+    assert cfg.skip_entities == ["input_boolean.vacation", "calendar.off"]
+    states = {"input_boolean.vacation": "off", "calendar.off": "on"}
+    monkeypatch.setattr(reminder.supervisor, "get_state", lambda e: {"state": states[e]})
+    assert reminder.day_off_entity(cfg) == "calendar.off"
+    states["calendar.off"] = "off"
+    assert reminder.day_off_entity(cfg) is None
+
+    def missing(e):
+        raise reminder.supervisor.SupervisorError(f"/core/api/states/{e}", 404, "Entity not found")
+
+    monkeypatch.setattr(reminder.supervisor, "get_state", missing)
+    assert reminder.day_off_entity(cfg) is None  # unreadable entity: remind anyway

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+- **Copy previous day:** an empty day offers to copy the last day you logged.
+- **Fill week:** log the same hours (e.g. Vacation 8h) on all empty workdays of a week.
+- **Contract hours:** set your weekly hours and workdays under ⚙. Week and month
+  show logged versus target hours and your running overtime balance; the day
+  view shows the daily target.
+- **Missing days:** week and month list the workdays you have not logged yet.
+- **Office / remote and km:** mark each day as office or remote and enter the km
+  you drove (prefilled on office days). Week and month count office and remote
+  days and total km; the CSV export has `location` and `km` columns.
+- New option `skip_entity`: no reminder while an entity is on, e.g. a vacation
+  calendar or `input_boolean`.
+
 ## 0.2.5
 
 - Live refresh: changes made on another device (e.g. your phone) show up

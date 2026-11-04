@@ -17,3 +17,6 @@ configuration:
   reminder_user:
     name: Reminder user
     description: Home Assistant username whose hours the reminder and sensor use. Leave empty when you are the only Workday user.
+  skip_entity:
+    name: Skip when on
+    description: "No reminder while this entity is on, e.g. input_boolean.vacation or calendar.vacation (during an event). Separate several with commas."

@@ -4,7 +4,8 @@
 (function () {
   "use strict";
 
-  const KEY = "workday-mock-v1";
+  const KEY = "workday-mock-v2";
+  const DEFAULT_SETTINGS = { weekly_hours: 40, workdays: [0, 1, 2, 3, 4], balance_start: null, office_km: 42 };
 
   function iso(d) {
     const p = (n) => String(n).padStart(2, "0");
@@ -39,7 +40,9 @@
         entries.push({ id: id++, date, category_id: 1, minutes: 480, note: back % 7 === 1 ? "Project Y" : "Project X" });
       }
     }
-    return { categories, entries, nextId: id, nextCat: 6 };
+    const days = {};
+    for (const e of entries) if (e.category_id === 1) days[e.date] = { location: e.date.endsWith("5") ? "remote" : "office", km: e.date.endsWith("5") ? null : 42 };
+    return { categories, entries, days, settings: { ...DEFAULT_SETTINGS }, nextId: id, nextCat: 6 };
   }
 
   let db;
@@ -57,6 +60,43 @@
 
   const ok = (data) => ({ status: 200, data });
   const bad = (msg) => ({ status: 422, data: { detail: msg } });
+
+  const settingsOut = () => {
+    const st = db.settings;
+    return { ...st, daily_minutes: st.workdays.length ? Math.round((st.weekly_hours * 60) / st.workdays.length) : 0 };
+  };
+  const parse = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
+  function* range(from, to) { for (let d = parse(from); iso(d) <= to; d.setDate(d.getDate() + 1)) yield new Date(d); }
+  const isWork = (d) => db.settings.workdays.includes((d.getDay() + 6) % 7);
+  const targetOf = (from, to) => (from > to ? 0 : [...range(from, to)].filter(isWork).length * settingsOut().daily_minutes);
+
+  function contract(from, to, day_totals) {
+    const today = iso(new Date());
+    const upto = to < today ? to : today;
+    const first = db.entries.reduce((m, e) => (!m || e.date < m ? e.date : m), null);
+    const since = db.settings.balance_start || first;
+    const on = db.settings.weekly_hours > 0;
+    const missing = since ? [...range(from > since ? from : since, upto)].filter((d) => isWork(d) && !day_totals[iso(d)]).map(iso) : [];
+    let balance = null;
+    if (on && since && since <= upto) {
+      balance = db.entries.filter((e) => e.date >= since && e.date <= upto).reduce((s, e) => s + e.minutes, 0) - targetOf(since, upto);
+    }
+    const day_info = {};
+    for (const [k, v] of Object.entries(db.days)) if (k >= from && k <= to) day_info[k] = v;
+    return {
+      target: on ? targetOf(from, to) : 0,
+      target_to_date: on ? targetOf(from, upto) : 0,
+      logged_to_date: Object.entries(day_totals).filter(([k]) => k <= upto).reduce((s, [, m]) => s + m, 0),
+      balance, balance_since: balance == null ? null : since, missing, day_info,
+    };
+  }
+
+  const dayOut = (date) => ({
+    date,
+    entries: db.entries.filter((e) => e.date === date),
+    location: (db.days[date] || {}).location || null,
+    km: (db.days[date] || {}).km ?? null,
+  });
 
   function report(from, to) {
     const rows = db.entries.filter((e) => e.date >= from && e.date <= to);
@@ -82,7 +122,7 @@
     const categories = [...byCat.values()]
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((c) => ({ ...c, notes: [...c.notes.values()].sort((a, b) => b.total - a.total) }));
-    return { from, to, total, day_totals, categories };
+    return { from, to, total, day_totals, categories, ...contract(from, to, day_totals) };
   }
 
   function csv(from, to) {
@@ -91,13 +131,15 @@
       if (/^[=+\-@]/.test(s)) s = "'" + s;
       return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const lines = ["date;category;hours;note"];
+    const lines = ["date;category;hours;note;location;km"];
     db.entries
       .filter((e) => e.date >= from && e.date <= to)
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id))
       .forEach((e) => {
         const c = db.categories.find((x) => x.id === e.category_id);
-        lines.push([e.date, c.name, String(e.minutes / 60).replace(".", ","), e.note || ""].map(cell).join(";"));
+        const first = db.entries.find((x) => x.date === e.date) === e;
+        const info = (first && db.days[e.date]) || {};
+        lines.push([e.date, c.name, String(e.minutes / 60).replace(".", ","), e.note || "", info.location || "", info.km == null ? "" : String(info.km).replace(".", ",")].map(cell).join(";"));
       });
     return "﻿" + lines.join("\r\n") + "\r\n";
   }
@@ -128,21 +170,42 @@
       }
     }
 
+    if (res === "settings") {
+      if (method === "PUT") { db.settings = { ...DEFAULT_SETTINGS, ...body }; save(); }
+      return ok(settingsOut());
+    }
+
+    if (res === "fill" && method === "POST") {
+      const filled = [...range(body.from, body.to)].map(iso)
+        .filter((k) => isWork(parse(k)) && !db.entries.some((e) => e.date === k));
+      for (const k of filled) db.entries.push({ id: db.nextId++, date: k, category_id: body.category_id, minutes: body.minutes, note: body.note || null });
+      save();
+      return ok({ filled });
+    }
+
     if (res === "day") {
       const date = parts[2];
-      if (method === "GET") return ok(db.entries.filter((e) => e.date === date));
+      if (parts[3] === "previous") {
+        const prev = db.entries.filter((e) => e.date < date).reduce((m, e) => (!m || e.date > m ? e.date : m), null);
+        return ok(prev ? dayOut(prev) : null);
+      }
+      if (method === "GET") return ok(dayOut(date));
       if (method === "PUT") {
-        if (!Array.isArray(body)) return bad("list expected");
+        const list = Array.isArray(body) ? body : body.entries;
+        if (!Array.isArray(body)) {
+          if (body.location == null && body.km == null) delete db.days[date];
+          else db.days[date] = { location: body.location, km: body.km };
+        }
         let sum = 0;
-        for (const e of body) {
+        for (const e of list) {
           if (e.minutes < 15 || e.minutes % 15 !== 0) return bad("minutes must be a positive multiple of 15");
           sum += e.minutes;
         }
         if (sum > 1440) return bad("day total exceeds 24h");
         db.entries = db.entries.filter((e) => e.date !== date);
-        const saved = body.map((e) => ({ id: db.nextId++, date, category_id: e.category_id, minutes: e.minutes, note: (e.note || "").trim() || null }));
+        const saved = list.map((e) => ({ id: db.nextId++, date, category_id: e.category_id, minutes: e.minutes, note: (e.note || "").trim() || null }));
         db.entries.push(...saved); save();
-        return ok(saved);
+        return ok(dayOut(date));
       }
     }
 

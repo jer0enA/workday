@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -14,6 +15,7 @@ WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 SENSOR = "sensor.workday_hours_today"
 TICK_SECONDS = 30
 SENSOR_REFRESH = dt.timedelta(minutes=5)
+ENTITY_ID_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
 
 
 @dataclass
@@ -25,6 +27,7 @@ class ReminderConfig:
     min_hours: float = 0.0
     panel_url: str = ""
     user: str = ""  # HA username; empty = the only Workday user
+    skip_entities: list[str] = field(default_factory=list)  # no reminder while one of these is "on"
 
 
 def config_from_options(options: dict, slug: str = "") -> ReminderConfig:
@@ -38,7 +41,27 @@ def config_from_options(options: dict, slug: str = "") -> ReminderConfig:
         min_hours=float(options.get("min_hours") or 0),
         panel_url=f"/{slug}" if slug else "",
         user=(options.get("reminder_user") or "").strip(),
+        skip_entities=parse_entities(options.get("skip_entity") or ""),
     )
+
+
+def parse_entities(value: str) -> list[str]:
+    """Comma-separated entity ids; invalid ones are ignored with a warning."""
+    ids = [e.strip().lower() for e in value.split(",") if e.strip()]
+    for bad in [e for e in ids if not ENTITY_ID_RE.match(e)]:
+        log.warning("Ignoring invalid skip_entity %r", bad)
+    return [e for e in ids if ENTITY_ID_RE.match(e)]
+
+
+def day_off_entity(cfg: ReminderConfig) -> str | None:
+    """The first skip entity that is "on" (e.g. a vacation calendar event), if any."""
+    for entity_id in cfg.skip_entities:
+        try:
+            if supervisor.get_state(entity_id).get("state") == "on":
+                return entity_id
+        except supervisor.SupervisorError as e:
+            log.warning("Could not read %s: %s", entity_id, e.message)
+    return None
 
 
 def is_due(cfg: ReminderConfig, last: dt.datetime, now: dt.datetime) -> bool:
@@ -114,8 +137,12 @@ async def run(cfg: ReminderConfig, minutes_for_day: Callable[[dt.date], int | No
             if is_due(cfg, last, now):
                 minutes = await asyncio.to_thread(minutes_for_day, now.date())
                 if minutes is not None and needs_reminder(cfg, minutes):
-                    await asyncio.to_thread(send_notification, cfg, minutes)
-                    log.info("Reminder sent via %s (%d min logged)", cfg.notify_service, minutes)
+                    off = await asyncio.to_thread(day_off_entity, cfg)
+                    if off:
+                        log.info("Reminder skipped: %s is on", off)
+                    else:
+                        await asyncio.to_thread(send_notification, cfg, minutes)
+                        log.info("Reminder sent via %s (%d min logged)", cfg.notify_service, minutes)
         except Exception:
             log.exception("Reminder/sensor update failed")
         last = now
