@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- Browsers always fetch the latest UI after an update instead of a cached copy.
+
 ## 0.2.2
 
 - New `1h` shortcut next to `4h` and `8h`.

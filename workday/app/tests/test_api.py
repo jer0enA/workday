@@ -90,6 +90,9 @@ def test_security_headers_and_static(client):
     assert r.status_code == 200 and "<title>Workday</title>" in r.text
     assert "default-src 'self'" in r.headers["content-security-policy"]
     assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["cache-control"] == "no-cache"
+    assert client.get("/app.js").headers["cache-control"] == "no-cache"
+    assert client.get("/api/categories").headers["cache-control"] == "no-store"
 
 
 def test_non_ingress_clients_rejected(monkeypatch):

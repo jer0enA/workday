@@ -210,6 +210,9 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
+        else:
+            # Revalidate the UI files (cheap via ETag) so updates show up at once.
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
     def current_user(request: Request, session: SessionDep) -> User:
