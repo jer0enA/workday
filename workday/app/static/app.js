@@ -255,6 +255,7 @@
             h("button", { type: "button", class: "step-btn plus", "aria-label": "More", onclick: () => setMinutes(r, r.minutes + STEP) }, "+"),
           ),
           h("span", { class: "quick" },
+            h("button", { type: "button", onclick: () => setMinutes(r, 60) }, "1h"),
             h("button", { type: "button", onclick: () => setMinutes(r, 240) }, "4h"),
             h("button", { type: "button", onclick: () => setMinutes(r, 480) }, "8h"),
           ),

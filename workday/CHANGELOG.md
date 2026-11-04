@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- New `1h` shortcut next to `4h` and `8h`.
+
 ## 0.2.1
 
 - Tapping the reminder notification opens Workday instead of a 404 page.

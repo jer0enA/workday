@@ -10,7 +10,7 @@ hours went. _4 hours on Project X, 4 hours studying._ Done.
 ## Features
 
 - **Quick day entry** — pick a category, tap `−` / `+` in 15-minute steps or
-  use the `4h` / `8h` shortcuts. Changes save automatically.
+  use the `1h` / `4h` / `8h` shortcuts. Changes save automatically.
 - **Categories** — Work, Study, Sick, Vacation and Public holiday out of the
   box; add, rename, recolor or archive your own.
 - **Notes with autocomplete** — write down the project or topic; notes you
