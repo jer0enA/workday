@@ -11,7 +11,7 @@ A minimal Home Assistant add-on for logging work hours in 15-minute steps.
 - Week and month overviews, CSV export
 - End-of-day reminder via any HA notify service, plus `sensor.workday_hours_today`
 - Data stored in the official MariaDB add-on (part of HA backups)
-- Login and access handled by Home Assistant Ingress
+- Login and access handled by Home Assistant Ingress; hours are kept per HA user
 
 ## Install
 

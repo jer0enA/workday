@@ -94,6 +94,7 @@
   }
 
   const api = {
+    me: () => call("GET", "api/me"),
     categories: () => call("GET", "api/categories"),
     addCategory: (c) => call("POST", "api/categories", c),
     patchCategory: (id, c) => call("PATCH", `api/categories/${id}`, c),
@@ -479,7 +480,8 @@
   // ---------- categories ----------
 
   async function renderCategories() {
-    categories = await api.categories();
+    const [cats, me] = await Promise.all([api.categories(), api.me().catch(() => null)]);
+    categories = cats;
     const msg = h("div", { class: "hint" }, "Archived categories are hidden when logging, but stay visible in reports.");
 
     const update = async (c, patch) => {
@@ -525,6 +527,8 @@
       listEl,
       h("div", { class: "new-cat" }, nameIn, h("button", { type: "button", class: "pill-btn primary", onclick: add }, "Add")),
       msg,
+      me ? h("div", { class: "hint" },
+        `Signed in as ${me.display_name}. Your hours and notes are private to you; categories are shared.`) : null,
     );
   }
 

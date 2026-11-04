@@ -11,10 +11,15 @@ The official **MariaDB** add-on must be installed and running. Workday creates
 its own `workday` database there on first start. Because the data lives in the
 MariaDB add-on, it is included in Home Assistant backups.
 
-## Access
+## Access and users
 
 Workday is only reachable through Home Assistant (Ingress): open it from the
 sidebar or the companion app. No port is exposed.
+
+Every Home Assistant user has their **own hours and notes**; the list of
+categories is shared. Non-admin users can open Workday too. Hours logged
+before version 0.2.0 belong to the first user who opens Workday after the
+update.
 
 ## End-of-day reminder
 
@@ -25,13 +30,15 @@ sidebar or the companion app. No port is exposed.
 | `reminder_days` | Weekdays to check (`mon` … `sun`). |
 | `notify_service` | Notify action, e.g. `notify.mobile_app_my_phone`. Find yours under *Developer tools → Actions*. |
 | `min_hours` | Remind when fewer hours are logged. `0` = only when nothing is logged. |
+| `reminder_user` | Home Assistant **username** whose hours are checked. Leave empty when you are the only Workday user. |
 
 Tapping the notification opens Workday. Restart the add-on after changing options.
 
 ## Sensor
 
-The add-on keeps `sensor.workday_hours_today` up to date (hours logged today),
-so you can build your own automations, e.g. a reminder on a speaker:
+The add-on keeps `sensor.workday_hours_today` up to date with the hours the
+reminder user logged today, so you can build your own automations, e.g. a
+reminder on a speaker:
 
 ```yaml
 triggers:

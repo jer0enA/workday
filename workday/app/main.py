@@ -15,14 +15,14 @@ from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Quer
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import db
 import reminder
 import supervisor
-from models import DEFAULT_CATEGORIES, Category, Entry
+from models import DEFAULT_CATEGORIES, Category, Entry, User
 
 log = logging.getLogger("workday")
 
@@ -32,6 +32,8 @@ STEP = 15
 DAY_MAX = 24 * 60
 MAX_RANGE_DAYS = 400
 COLOR_RE = r"^#[0-9a-fA-F]{6}$"
+USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+DEV_USER = {"id": "dev", "username": "dev", "display_name": "Developer"}
 
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -117,9 +119,31 @@ def seed_categories(session: Session) -> None:
     session.commit()
 
 
-def minutes_for_day(day: dt.date) -> int:
+def migrate(engine) -> None:
+    """Add columns that create_all() cannot add to existing tables."""
+    columns = {c["name"] for c in inspect(engine).get_columns("entries")}
+    if "user_id" not in columns:
+        log.info("Migrating: adding entries.user_id")
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE entries ADD COLUMN user_id VARCHAR(64) NULL"))
+            conn.execute(text("CREATE INDEX ix_entries_user_id ON entries (user_id)"))
+
+
+def minutes_for_day(day: dt.date, user_id: str) -> int:
     with db.SessionLocal() as session:
-        return session.scalar(select(func.coalesce(func.sum(Entry.minutes), 0)).where(Entry.date == day)) or 0
+        total = session.scalar(
+            select(func.coalesce(func.sum(Entry.minutes), 0)).where(Entry.date == day, Entry.user_id == user_id)
+        )
+        return int(total or 0)
+
+
+def reminder_user_id(username: str) -> str | None:
+    """The user the reminder and sensor are for: the configured one, else the only user."""
+    with db.SessionLocal() as session:
+        if username:
+            return session.scalar(select(User.id).where(func.lower(User.username) == username.lower()))
+        ids = session.scalars(select(User.id).limit(2)).all()
+        return ids[0] if len(ids) == 1 else None
 
 
 def check_range(start: dt.date, end: dt.date) -> None:
@@ -134,9 +158,9 @@ def csv_cell(value: str) -> str:
     return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
 
 
-def push_sensor_today() -> None:
+def push_sensor_today(user_id: str) -> None:
     try:
-        reminder.publish_sensor(minutes_for_day(dt.date.today()))
+        reminder.publish_sensor(minutes_for_day(dt.date.today(), user_id))
     except Exception:
         log.exception("Could not update %s", reminder.SENSOR)
 
@@ -147,14 +171,20 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
     db.init_engine(db_url)
     ha = supervisor.available()
 
+    def reminder_minutes(day: dt.date) -> int | None:
+        uid = reminder_user_id(reminder_cfg.user if reminder_cfg else "")
+        return None if uid is None else minutes_for_day(day, uid)
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
         db.Base.metadata.create_all(db.engine)
+        migrate(db.engine)
         with db.SessionLocal() as session:
             seed_categories(session)
+            app.state.unclaimed = session.scalar(select(Entry.id).where(Entry.user_id.is_(None)).limit(1)) is not None
         task = None
         if ha and reminder_cfg is not None:
-            task = asyncio.create_task(reminder.run(reminder_cfg, minutes_for_day))
+            task = asyncio.create_task(reminder.run(reminder_cfg, reminder_minutes))
         yield
         if task:
             task.cancel()
@@ -181,6 +211,45 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response
+
+    def current_user(request: Request, session: SessionDep) -> User:
+        # Ingress adds these headers for the logged-in HA user; the guard above
+        # ensures only the Ingress proxy can reach us, so they can be trusted.
+        uid = request.headers.get("x-remote-user-id", "")
+        if not uid and dev_mode:
+            info = DEV_USER
+        elif USER_ID_RE.match(uid):
+            info = {
+                "id": uid,
+                "username": request.headers.get("x-remote-user-name", "")[:100],
+                "display_name": request.headers.get("x-remote-user-display-name", "")[:200],
+            }
+        else:
+            raise HTTPException(401, "no Home Assistant user")
+        user = session.get(User, info["id"])
+        now = dt.datetime.now()
+        if user is None:
+            user = User(**info, last_seen=now)
+            session.add(user)
+            log.info("New user: %s", info["username"] or info["id"])
+        elif (user.username, user.display_name) != (info["username"], info["display_name"]) or (
+            now - user.last_seen > dt.timedelta(hours=1)
+        ):
+            user.username, user.display_name, user.last_seen = info["username"], info["display_name"], now
+        if app.state.unclaimed:
+            # Hours logged before per-user support go to the first user.
+            claimed = session.execute(update(Entry).where(Entry.user_id.is_(None)).values(user_id=user.id)).rowcount
+            app.state.unclaimed = False
+            if claimed:
+                log.info("Assigned %d existing entries to %s", claimed, user.username or user.id)
+        session.commit()
+        return user
+
+    UserDep = Annotated[User, Depends(current_user)]
+
+    @app.get("/api/me")
+    def me(user: UserDep):
+        return {"username": user.username, "display_name": user.display_name or user.username}
 
     # --- categories ---
 
@@ -217,14 +286,17 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
     # --- days ---
 
     @app.get("/api/day/{day}", response_model=list[EntryOut])
-    def get_day(day: dt.date, session: SessionDep):
-        return session.scalars(select(Entry).where(Entry.date == day).order_by(Entry.id)).all()
+    def get_day(day: dt.date, session: SessionDep, user: UserDep):
+        return session.scalars(
+            select(Entry).where(Entry.date == day, Entry.user_id == user.id).order_by(Entry.id)
+        ).all()
 
     @app.put("/api/day/{day}", response_model=list[EntryOut])
     def put_day(
         day: dt.date,
         body: Annotated[list[EntryIn], Body(max_length=50)],
         session: SessionDep,
+        user: UserDep,
         background: BackgroundTasks,
     ):
         if sum(e.minutes for e in body) > DAY_MAX:
@@ -234,13 +306,16 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
             known = set(session.scalars(select(Category.id).where(Category.id.in_(ids))))
             if ids - known:
                 raise HTTPException(422, "unknown category")
-        for old in session.scalars(select(Entry).where(Entry.date == day)):
+        for old in session.scalars(select(Entry).where(Entry.date == day, Entry.user_id == user.id)):
             session.delete(old)
-        rows = [Entry(date=day, category_id=e.category_id, minutes=e.minutes, note=e.note) for e in body]
+        rows = [
+            Entry(user_id=user.id, date=day, category_id=e.category_id, minutes=e.minutes, note=e.note) for e in body
+        ]
         session.add_all(rows)
         session.commit()
-        if ha and day == dt.date.today():
-            background.add_task(push_sensor_today)
+        if ha and reminder_cfg is not None and day == dt.date.today():
+            if reminder_user_id(reminder_cfg.user) == user.id:
+                background.add_task(push_sensor_today, user.id)
         return rows
 
     # --- note suggestions ---
@@ -248,11 +323,12 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
     @app.get("/api/notes", response_model=list[str])
     def suggest_notes(
         session: SessionDep,
+        user: UserDep,
         category_id: int | None = None,
         q: Annotated[str, Query(max_length=200)] = "",
     ):
         last_used = func.max(Entry.date)
-        stmt = select(Entry.note).where(Entry.note.is_not(None))
+        stmt = select(Entry.note).where(Entry.user_id == user.id, Entry.note.is_not(None))
         if category_id is not None:
             stmt = stmt.where(Entry.category_id == category_id)
         if q.strip():
@@ -262,17 +338,18 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
 
     # --- reports ---
 
-    def range_entries(session: Session, start: dt.date, end: dt.date):
+    def range_entries(session: Session, user: User, start: dt.date, end: dt.date):
         return session.execute(
             select(Entry, Category)
             .join(Category, Entry.category_id == Category.id)
-            .where(Entry.date >= start, Entry.date <= end)
+            .where(Entry.user_id == user.id, Entry.date >= start, Entry.date <= end)
             .order_by(Entry.date, Entry.id)
         ).all()
 
     @app.get("/api/report")
     def report(
         session: SessionDep,
+        user: UserDep,
         start: Annotated[dt.date, Query(alias="from")],
         end: Annotated[dt.date, Query(alias="to")],
     ):
@@ -280,7 +357,7 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         day_totals: dict[str, int] = {}
         cats: dict[int, dict] = {}
         total = 0
-        for entry, cat in range_entries(session, start, end):
+        for entry, cat in range_entries(session, user, start, end):
             d = entry.date.isoformat()
             total += entry.minutes
             day_totals[d] = day_totals.get(d, 0) + entry.minutes
@@ -304,6 +381,7 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
     @app.get("/api/export.csv")
     def export_csv(
         session: SessionDep,
+        user: UserDep,
         start: Annotated[dt.date, Query(alias="from")],
         end: Annotated[dt.date, Query(alias="to")],
     ):
@@ -311,7 +389,7 @@ def create_app(db_url: str, dev_mode: bool = False, reminder_cfg: reminder.Remin
         buf = io.StringIO()
         writer = csv.writer(buf, delimiter=";", lineterminator="\r\n")
         writer.writerow(["date", "category", "hours", "note"])
-        for entry, cat in range_entries(session, start, end):
+        for entry, cat in range_entries(session, user, start, end):
             hours = f"{entry.minutes / 60:g}".replace(".", ",")
             writer.writerow([entry.date.isoformat(), csv_cell(cat.name), hours, csv_cell(entry.note or "")])
         filename = f"workday_{start.isoformat()}_{end.isoformat()}.csv"

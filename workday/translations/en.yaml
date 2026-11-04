@@ -14,3 +14,6 @@ configuration:
   min_hours:
     name: Minimum hours
     description: Remind when fewer hours than this are logged. 0 means only when nothing is logged.
+  reminder_user:
+    name: Reminder user
+    description: Home Assistant username whose hours the reminder and sensor use. Leave empty when you are the only Workday user.

@@ -24,6 +24,7 @@ class ReminderConfig:
     notify_service: str = ""
     min_hours: float = 0.0
     panel_url: str = ""
+    user: str = ""  # HA username; empty = the only Workday user
 
 
 def config_from_options(options: dict, slug: str = "") -> ReminderConfig:
@@ -36,6 +37,7 @@ def config_from_options(options: dict, slug: str = "") -> ReminderConfig:
         notify_service=(options.get("notify_service") or "").strip(),
         min_hours=float(options.get("min_hours") or 0),
         panel_url=f"/hassio/ingress/{slug}" if slug else "",
+        user=(options.get("reminder_user") or "").strip(),
     )
 
 
@@ -84,21 +86,34 @@ def publish_sensor(logged_minutes: int) -> None:
     })
 
 
-async def run(cfg: ReminderConfig, minutes_for_day: Callable[[dt.date], int]) -> None:
-    """Background loop: refreshes the sensor and sends the daily reminder."""
+async def run(cfg: ReminderConfig, minutes_for_day: Callable[[dt.date], int | None]) -> None:
+    """Background loop: refreshes the sensor and sends the daily reminder.
+
+    ``minutes_for_day`` returns None while it is unknown whose hours to use
+    (nobody opened Workday yet, or several users and no ``reminder_user``).
+    """
     last = dt.datetime.now()
     last_sensor: tuple[dt.date, dt.datetime] | None = None
+    warned = False
     while True:
         await asyncio.sleep(TICK_SECONDS)
         now = dt.datetime.now()
         try:
             if last_sensor is None or last_sensor[0] != now.date() or now - last_sensor[1] >= SENSOR_REFRESH:
                 minutes = await asyncio.to_thread(minutes_for_day, now.date())
-                await asyncio.to_thread(publish_sensor, minutes)
+                if minutes is not None:
+                    await asyncio.to_thread(publish_sensor, minutes)
+                    warned = False
+                elif not warned:
+                    log.warning(
+                        "No user for the reminder and sensor yet: open Workday once, or set "
+                        "reminder_user when several people use it"
+                    )
+                    warned = True
                 last_sensor = (now.date(), now)
             if is_due(cfg, last, now):
                 minutes = await asyncio.to_thread(minutes_for_day, now.date())
-                if needs_reminder(cfg, minutes):
+                if minutes is not None and needs_reminder(cfg, minutes):
                     await asyncio.to_thread(send_notification, cfg, minutes)
                     log.info("Reminder sent via %s (%d min logged)", cfg.notify_service, minutes)
         except Exception:

@@ -108,6 +108,8 @@
     const q = url.searchParams;
     const res = parts[1];
 
+    if (res === "me") return ok({ username: "demo", display_name: "Demo user" });
+
     if (res === "categories") {
       if (method === "GET") return ok([...db.categories].sort((a, b) => a.sort_order - b.sort_order));
       if (method === "POST") {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- Hours and notes are now per Home Assistant user; categories stay shared.
+  Existing hours go to the first user who opens Workday after the update.
+- Non-admin Home Assistant users can open Workday.
+- New option `reminder_user`: whose hours the reminder and sensor use.
+- The settings page shows who you are signed in as.
+
 ## 0.1.2
 
 - Wait up to 5 minutes for the MariaDB add-on at startup instead of crashing.

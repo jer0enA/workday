@@ -1,5 +1,5 @@
 name: Workday
-version: "0.1.2"
+version: "0.2.0"
 slug: workday
 description: Log your daily hours in 15-minute steps, with week/month overviews and CSV export.
 url: https://github.com/jer0enA/workday
@@ -9,6 +9,7 @@ arch:
 ingress: true
 panel_icon: mdi:clock-outline
 panel_title: Workday
+panel_admin: false
 homeassistant_api: true
 hassio_api: true
 services:
@@ -24,6 +25,7 @@ options:
     - fri
   notify_service: ""
   min_hours: 0
+  reminder_user: ""
 schema:
   reminder_enabled: bool
   reminder_time: match(^([01][0-9]|2[0-3]):[0-5][0-9]$)
@@ -31,3 +33,4 @@ schema:
     - list(mon|tue|wed|thu|fri|sat|sun)
   notify_service: str?
   min_hours: float(0,24)
+  reminder_user: str?
