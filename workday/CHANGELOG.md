@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- Fix: with a daily target that is not a whole quarter (e.g. 36 h/week = 7:12),
+  new rows could not be saved and `−` / `+` left the 15-minute grid. New rows
+  now start at the nearest quarter and the stepper snaps to it.
+- Clearer error messages when saving fails.
+
 ## 0.3.0
 
 - **Copy previous day:** an empty day offers to copy the last day you logged.

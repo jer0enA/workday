@@ -13,6 +13,8 @@
   const parseIso = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
   const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
   const today = () => iso(new Date());
+  // Hours are stored in 15-minute steps; targets like 7:12 are not.
+  const toStep = (m) => Math.round(m / STEP) * STEP;
   const fmt = (m) => `${Math.floor(m / 60)}:${pad(m % 60)}`;
   const fmtSigned = (m) => `${m < 0 ? "−" : "+"}${fmt(Math.abs(m))}`;
   const fmtKm = (km) => `${Math.round(km * 10) / 10} km`;
@@ -81,7 +83,7 @@
     if (rev) knownRev = rev; // our own change: no need to reload for it
     if (!r.ok) {
       let msg = `HTTP ${r.status}`;
-      try { const j = await r.json(); if (j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch (_) { /* not json */ }
+      try { const j = await r.json(); if (j.detail) msg = typeof j.detail === "string" ? j.detail : [...new Set(j.detail.map((d) => d.msg || String(d)))].join("; "); } catch (_) { /* not json */ }
       throw new Error(msg);
     }
     return asText ? r.text() : r.json();
@@ -248,7 +250,7 @@
 
     function setMinutes(r, m) {
       const others = total() - r.minutes;
-      r.minutes = Math.max(STEP, Math.min(m, DAY_MAX - others));
+      r.minutes = Math.max(STEP, Math.min(toStep(m), DAY_MAX - others));
       changed();
     }
 
@@ -280,9 +282,9 @@
         h("div", { class: "entry-top" },
           h("span", { class: "cat-wrap" }, dot, select),
           h("span", { class: "stepper" },
-            h("button", { type: "button", class: "step-btn minus", "aria-label": "Less", onclick: () => setMinutes(r, r.minutes - STEP) }, "−"),
+            h("button", { type: "button", class: "step-btn minus", "aria-label": "Less", onclick: () => setMinutes(r, Math.ceil(r.minutes / STEP) * STEP - STEP) }, "−"),
             h("span", { class: "hours" }, fmt(r.minutes)),
-            h("button", { type: "button", class: "step-btn plus", "aria-label": "More", onclick: () => setMinutes(r, r.minutes + STEP) }, "+"),
+            h("button", { type: "button", class: "step-btn plus", "aria-label": "More", onclick: () => setMinutes(r, Math.floor(r.minutes / STEP) * STEP + STEP) }, "+"),
           ),
           h("span", { class: "quick" },
             h("button", { type: "button", onclick: () => setMinutes(r, 60) }, "1h"),
@@ -325,7 +327,7 @@
       const left = DAY_MAX - total();
       if (left < STEP) return;
       const remaining = (target || WORKDAY) - total();
-      const minutes = Math.min(remaining >= STEP ? remaining : 60, left);
+      const minutes = Math.min(remaining >= STEP ? toStep(remaining) : 60, left);
       rows.push({ key: `n${keySeq++}`, category_id: catId, minutes, note: "", focus: true });
       drawList();
       changed();
@@ -551,7 +553,7 @@
     const empty = days.filter((d) => isWorkday(d) && !report.day_totals[iso(d)]);
     const usable = categories.filter((c) => !c.archived);
     const vacation = usable.find((c) => /vacation/i.test(c.name)) || usable[0];
-    let minutes = settings.daily_minutes ? Math.round(settings.daily_minutes / STEP) * STEP : WORKDAY;
+    let minutes = settings.daily_minutes ? toStep(settings.daily_minutes) : WORKDAY;
     const catSel = h("select", { class: "field", "aria-label": "Category" },
       usable.map((c) => h("option", { value: String(c.id), selected: c === vacation }, c.name)));
     const hoursEl = h("span", { class: "hours" }, fmt(minutes));
