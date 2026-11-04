@@ -71,6 +71,7 @@ button { cursor: pointer; }
   border-radius: 99px;
   background: var(--accent-soft);
   color: var(--accent);
+  white-space: nowrap;
 }
 
 .tabs {
@@ -430,6 +431,7 @@ table.report { width: 100%; border-collapse: collapse; font-variant-numeric: tab
 
 @media (max-width: 520px) {
   .topbar { padding: 8px 12px; gap: 8px; }
+  .badge { display: none; }
   .tab { padding: 5px 10px; }
   .navbar .label { min-width: 0; flex: 1; font-size: 16px; }
   .stepper { margin-left: 0; }

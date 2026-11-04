@@ -1,6 +1,11 @@
-# Workday
+<p align="center"><img src="workday/logo.png" alt="Workday" width="250"></p>
 
 A minimal Home Assistant add-on for logging work hours in 15-minute steps.
+
+<p align="center">
+  <img src="docs/screenshots/day.png" alt="Day view" width="560">
+  <img src="docs/screenshots/phone-dark.png" alt="Day view on a phone, dark mode" width="220">
+</p>
 
 - Day view with ‹ › navigation (or arrow keys), categories, notes with autocomplete
 - Week and month overviews, CSV export
@@ -19,6 +24,9 @@ A minimal Home Assistant add-on for logging work hours in 15-minute steps.
 Updates appear in Home Assistant when `version` in `workday/config.yaml` is bumped.
 
 ## Development
+
+Artwork sources (SVG) are in `art/`.
+
 
 ```sh
 # UI only, with in-browser demo data
