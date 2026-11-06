@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4
+
+- The end-of-day reminder is sent as a high-priority notification, so Android
+  delivers it right away instead of holding it back while the phone is idle.
+
 ## 0.3.3
 
 - **Hours per workday** setting (default 8): used as the day target and the

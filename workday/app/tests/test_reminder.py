@@ -52,6 +52,7 @@ def test_message_and_service_call(monkeypatch):
     assert data["message"] == "You haven't logged any hours today."
     assert data["data"]["url"] == "/local_workday"
     assert "4:30" in reminder.build_message(CFG, 270)["message"]
+    assert data["data"]["priority"] == "high" and data["data"]["ttl"] == 0
 
 
 def test_skip_entities(monkeypatch):

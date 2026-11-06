@@ -86,7 +86,8 @@ def build_message(cfg: ReminderConfig, logged_minutes: int) -> dict:
     else:
         h, m = divmod(logged_minutes, 60)
         text = f"Only {h}:{m:02d} logged today. Don't forget to fill in your hours."
-    data: dict = {"tag": "workday-reminder"}
+    # Android: deliver right away, even when the phone is idle (Doze) instead of batching it.
+    data: dict = {"tag": "workday-reminder", "priority": "high", "ttl": 0}
     if cfg.panel_url:
         data["url"] = cfg.panel_url  # iOS
         data["clickAction"] = cfg.panel_url  # Android
