@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5
+
+- Security: include the latest Alpine security fixes in the image (zlib
+  CVE-2026-4738).
+- Updated FastAPI to 0.162.2.
+
 ## 0.3.4
 
 - The end-of-day reminder is sent as a high-priority notification, so Android
